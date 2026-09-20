@@ -1,2 +1,15 @@
-# Time-Table-Clash-detection-system
-Time Table Clash Detection System detects conflicts between classes, teachers, rooms, and time slots to ensure a clash-free timetable.
+# Timetable Clash Detection
+
+A C++ based system for detecting clashes in academic timetables.
+
+## Features
+- Timetable creation
+- Timetable management
+- Clash detection
+- Clash reporting
+- File storage
+
+## Technologies
+- C++
+- Object-Oriented Programming
+- Data Structures and Algorithms
