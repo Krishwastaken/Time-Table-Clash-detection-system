@@ -1,0 +1,9 @@
+Subject,Faculty,Room,Section,Day,StartTime,EndTime
+Data Structures,Dr. Sharma,Room 101,Sec A,Monday,09:00,10:00
+Database Systems,Prof. Verma,Room 102,Sec B,Monday,09:00,10:00
+Operating Systems,Dr. Gupta,Room 101,Sec A,Monday,09:30,10:30
+Computer Networks,Prof. Singh,Room 103,Sec A,Tuesday,11:00,12:00
+Software Engineering,Dr. Mehta,Room 102,Sec B,Tuesday,11:00,12:00
+Data Structures,Dr. Sharma,Room 101,Sec B,Monday,10:00,11:00
+Algorithms,Dr. Sharma,Room 101,Sec A,Wednesday,09:00,10:00
+Web Development,Prof. Verma,Room 104,Sec C,Wednesday,10:00,11:00
