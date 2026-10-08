@@ -1,7 +1,7 @@
 #include <iostream>
 #include <iomanip>
 #include <stdexcept>
-#include "input.h"
+#include "Input.h"
 #include "sorting.h"
 
 using namespace std;

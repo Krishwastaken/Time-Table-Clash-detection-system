@@ -45,10 +45,14 @@ void sortSessions(std::vector<Session>& sessions, const std::string& key) {
         Session current = sessions[i];
         int j = (int)i - 1;
         while (j >= 0) {
-            bool shouldShift = (key == "faculty") ? (sessions[j].faculty > current.faculty)
-                              : (key == "room")    ? (sessions[j].room > current.room)
-                              : false;
+            bool shouldShift = (key == "faculty")
+                            ? (sessions[j].getFaculty() > current.getFaculty())
+                            : (key == "room")
+                            ? (sessions[j].getRoom() > current.getRoom())
+                            : false;
+
             if (!shouldShift) break;
+
             sessions[j + 1] = sessions[j];
             j--;
         }
