@@ -7,7 +7,8 @@ Session::Session(
     const std::string& section,
     const std::string& day,
     const std::string& startTime,
-    const std::string& endTime
+    const std::string& endTime,
+    int studentCount
 )
     : subject(subject),
       faculty(faculty),
@@ -15,7 +16,8 @@ Session::Session(
       section(section),
       day(day),
       startTime(startTime),
-      endTime(endTime)
+      endTime(endTime),
+      studentCount(studentCount)
 {
 }
 
@@ -26,7 +28,8 @@ Session::Session()
       section(""),
       day(""),
       startTime(""),
-      endTime("")
+      endTime(""),
+      studentCount(0)
 {
 }
 
@@ -59,6 +62,20 @@ std::string Session::getEndTime() const {
     return endTime;
 }
 
+int Session::getStudentCount() const {
+    return studentCount;
+}
+
+int Session::getRoomCapacity() const {
+    if (room.rfind("CR", 0) == 0)
+        return 100;
+
+    if (room.rfind("LT", 0) == 0)
+        return 200;
+
+    return 0;
+}
+
 bool Session::operator<(const Session& other) const {
     if (day != other.day)
         return day < other.day;
@@ -73,7 +90,8 @@ std::ostream& operator<<(std::ostream& os, const Session& session) {
        << session.section << " | "
        << session.day << " | "
        << session.startTime << " - "
-       << session.endTime;
+       << session.endTime << " | "
+       << session.studentCount << " students";
 
     return os;
 }
