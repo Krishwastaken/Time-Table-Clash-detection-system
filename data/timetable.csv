@@ -1,9 +1,20 @@
-Subject,Faculty,Room,Section,Day,StartTime,EndTime,studentCount
-Data Structures,Dr. Sharma,Room 101,Sec A,Monday,09:00,10:00,70
-Database Systems,Prof. Verma,Room 102,Sec B,Monday,09:00,10:00,75
-Operating Systems,Dr. Gupta,Room 101,Sec A,Monday,09:30,10:30,75
-Computer Networks,Prof. Singh,Room 103,Sec A,Tuesday,11:00,12:00,80
-Software Engineering,Dr. Mehta,Room 102,Sec B,Tuesday,11:00,12:00,70
-Data Structures,Dr. Sharma,Room 101,Sec B,Monday,10:00,11:00,80
-Algorithms,Dr. Sharma,Room 101,Sec A,Wednesday,09:00,10:00,75
-Web Development,Prof. Verma,Room 104,Sec C,Wednesday,10:00,11:00,65
+Subject,Faculty,Room,Section,Day,StartTime,EndTime,StudentCount
+Data Structures,Dr Sharma,CR 101,A,Monday,09:00,10:00,80
+Operating Systems,Dr Sharma,LT 201,B,Monday,09:30,10:30,70
+Database Systems,Dr Verma,CR 102,A,Monday,09:30,10:30,60
+Computer Networks,Dr Singh,CR 101,C,Monday,09:15,10:15,90
+Software Engineering,Dr Mehta,LT 202,D,Monday,09:00,10:00,50
+Algorithms,Dr Rao,CR 103,E,Monday,10:00,11:00,40
+Web Development,Dr Kapoor,cr 104,F,Monday,11:00,12:00,120
+Artificial Intelligence,Dr Das,LT 203,G,Monday,11:00,12:00,210
+Machine Learning,Dr Roy,CR 105,H,Tuesday,09:00,10:00,50
+Computer Graphics,Dr Jain,CR 106,I,Monday,09:00,10:00,40
+Computer Graphics,Dr Jain,CR 106,I,Monday,09:00,10:00,40
+Data Science,Dr Sen,LT 204,J,Wednesday,13:00,14:00,201
+Cyber Security,Dr Bose,LT 205,K,Wednesday,14:00,15:00,200
+LUNCH,,CR 107,L,Monday,12:00,13:00,150
+LIB,,CR 108,M,Monday,13:00,14:00,150
+SWAYAM,,CR 109,N,Monday,14:00,15:00,150
+Training Session,,CR 110,O,Monday,15:00,16:00,150
+Extra-Curricular Activities,,CR 111,P,Monday,16:00,17:00,150
+Lab Session,Dr Lab,LAB 1,Q,Thursday,09:00,11:00,250
