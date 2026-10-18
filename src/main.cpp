@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include "Input.h"
 #include "sorting.h"
+#include "ClashDetector.h"
 
 using namespace std;
 
@@ -12,31 +13,46 @@ void printSessions(const vector<Session>& sessions) {
     }
 }
 
+
 int main() {
-    string filePath = "data/timetable.csv";
+    string filePath = "data/timetable1.csv";
     vector<Session> sessions = loadSessionsFromCSV(filePath);
 
     cout << "==========================================" << endl;
     cout << "       TIMETABLE INPUT MODULE TEST        " << endl;
     cout << "==========================================" << endl;
-    cout << "Total Sessions Loaded: " << sessions.size() << endl;
+    cout << "Total Sessions Loaded: "
+         << sessions.size() << endl;
     cout << "------------------------------------------" << endl;
 
     try {
-        cout << "\n--- Sorted by Day + Time (Merge Sort, default key) ---" << endl;
-        sortSessions(sessions);              // Overload 1: default merge sort
+        cout << "\n--- Sorted by Day + Time (Merge Sort) ---"
+             << endl;
+
+        sortSessions(sessions);
         printSessions(sessions);
 
-        cout << "\n--- Sorted by Faculty (different key) ---" << endl;
-        sortSessions(sessions, "faculty");   // Overload 2: sort by different key
+        //clash detection module
+        cout << "\n--- Clash Detection ---" << endl;
+
+        vector<Clash> clashes =
+            ClashDetector::detectClashes(sessions);
+
+        ClashDetector::printClashes(clashes, sessions);
+
+        //sorting
+        cout << "\n--- Sorted by Faculty ---" << endl;
+        sortSessions(sessions, "faculty");
         printSessions(sessions);
 
-        cout << "\n--- Triggering exception on empty list ---" << endl;
+        cout << "\n--- Triggering exception on empty list ---"
+             << endl;
+
         vector<Session> empty;
-        sortSessions(empty);                 // this will throw
+        sortSessions(empty);
 
     } catch (const invalid_argument& e) {
-        cout << "Caught exception: " << e.what() << endl; // C++ Unit 5: Exception Handling
+        cout << "Caught exception: " << e.what() << endl;
     }
 
     return 0;

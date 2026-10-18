@@ -13,6 +13,7 @@ private:
     std::string day;
     std::string startTime;
     std::string endTime;
+    int studentCount;
 
 public:
     Session(
@@ -22,7 +23,9 @@ public:
         const std::string& section,
         const std::string& day,
         const std::string& startTime,
-        const std::string& endTime
+        const std::string& endTime,
+        int studentCount
+        
     );
 
     Session();
@@ -34,6 +37,8 @@ public:
     std::string getDay() const;
     std::string getStartTime() const;
     std::string getEndTime() const;
+    int getStudentCount() const;
+    int getRoomCapacity() const;
 
     bool operator<(const Session& other) const;
 

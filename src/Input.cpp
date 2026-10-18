@@ -3,7 +3,6 @@
 #include <fstream>
 #include <sstream>
 
-// Helper function to remove trailing '\r' if line has Windows CRLF line endings
 static std::string trimCR(const std::string& str) {
     std::string result = str;
     if (!result.empty() && result.back() == '\r') {
@@ -46,10 +45,10 @@ std::vector<Session> loadSessionsFromCSV(const std::string& filepath) {
             row.push_back(token);
         }
 
-        // A valid row must contain exactly 7 fields
-        if (row.size() != 7) {
+        //valid row = 7 fields
+        if (row.size() != 8) {
             std::cerr << "Warning: Skipping malformed row at line " << lineNumber 
-                      << " (expected 7 fields, found " << row.size() << "): " << line << std::endl;
+                      << " (expected 8 fields, found " << row.size() << "): " << line << std::endl;
             continue;
         }
 
@@ -60,7 +59,8 @@ std::vector<Session> loadSessionsFromCSV(const std::string& filepath) {
             row[3], 
             row[4], 
             row[5], 
-            row[6]  
+            row[6],
+            std::stoi(row[7])
         );
 
         sessions.push_back(session);
