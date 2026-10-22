@@ -29,6 +29,23 @@ Data Structures,Dr. Sharma,CR 101,A,Monday,09:00,10:00
 
 If testing room-capacity clashes, the CSV parser and `Session` class must also support a student-count field.
 
+## Build and Run
+Open the terminal in the repository's root directory and compile the source files:
+
+g++ -std=c++17 src/*.cpp -o timetable.exe
+
+Run the program:
+
+Windows PowerShell:
+
+.\timetable.exe
+
+Git Bash:
+
+./timetable.exe
+
+Note: Run the program from the repository root so relative paths to files in the data/ directory work correctly.
+
 ## Testing
 Test clean schedules, each clash type, duplicate rows, back-to-back sessions, excluded activities, and room names with different capitalization.
 
