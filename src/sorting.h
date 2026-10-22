@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <string>
-#include "session.h"
+#include "Session.h"
 
 // Two-Way Merge Sort — sorts by day, then start time
 // Throws std::invalid_argument if the list is empty.
