@@ -1,38 +1,36 @@
-
 #include "TimetableFetcher.h"
 #include "Session.h"
 
-#include <iostream>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
+#include <regex>
 #include <sstream>
 #include <string>
-#include <vector>
-#include <regex>
-#include <cstdlib>
-#include <cctype>
 #include <unordered_map>
-#include <algorithm>
+#include <utility>
+#include <vector>
 
 namespace
 {
+    // ------------------------------------------------------------
+    // Data structures
+    // ------------------------------------------------------------
+
     struct ParsedCell
     {
         std::string text;
         int colSpan;
         int rowSpan;
+        int width;          // the HTML width="" attribute in pixels (0 = unknown)
 
-        ParsedCell() : colSpan(1), rowSpan(1) {}
+        ParsedCell() : colSpan(1), rowSpan(1), width(0) {}
     };
 
-    struct ParsedRow
-    {
-        std::vector<ParsedCell> cells;
-    };
-
-    struct ParsedTable
-    {
-        std::vector<ParsedRow> rows;
-    };
+    struct ParsedRow   { std::vector<ParsedCell> cells; };
+    struct ParsedTable { std::vector<ParsedRow> rows; };
 
     struct SubjectReference
     {
@@ -41,23 +39,46 @@ namespace
         std::string faculty;
     };
 
-    struct ExtractedSession
+    // Everything the reference table of one section tells us.
+    struct SectionReference
     {
-        Session session;
-        bool conditionalSaturday;
+        std::unordered_map<std::string, SubjectReference> byCode;
+        std::string iksFaculty;
+        // "Career Excellence Classes (CEC) LT-6" rows: room -> faculty.
+        std::vector<std::pair<std::string, std::string>> cecByRoom;
     };
 
-    std::string normalizeDay(const std::string& day);
-    std::vector<std::string> splitCellSegments(const std::string& text);
-    bool isNonAcademic(const std::string& text);
-    std::string getSlotTime(int slot, bool isEnd);
-    std::vector<std::vector<std::string>> splitParallelLabs(
-        const std::vector<std::string>& segments
-    );
+    struct BuildStats
+    {
+        int cells = 0;
+        int sessions = 0;
+        int unmatched = 0;
+        int lookupMissed = 0;
+        int unknownRoom = 0;
+        int badGeometry = 0;
+        std::vector<std::string> notes;
 
-    // --------------------------------------------------------
-    // FILE READING
-    // --------------------------------------------------------
+        void note(const std::string& text)
+        {
+            if (notes.size() < 25)
+                notes.push_back(text);
+        }
+    };
+
+    // Ten teaching slots per day.
+    const char* const SLOT_START[10] = {
+        "08:00", "09:00", "09:55", "11:10", "12:05",
+        "13:00", "13:55", "15:10", "16:05", "17:00"
+    };
+
+    const char* const SLOT_END[10] = {
+        "08:55", "09:55", "10:50", "12:05", "13:00",
+        "13:55", "14:50", "16:05", "17:00", "17:55"
+    };
+
+    // ------------------------------------------------------------
+    // Small string helpers
+    // ------------------------------------------------------------
 
     std::string readFile(const std::string& filePath)
     {
@@ -71,51 +92,8 @@ namespace
 
         std::ostringstream buffer;
         buffer << file.rdbuf();
-
         return buffer.str();
     }
-
-
-    // --------------------------------------------------------
-    // HTML TEXT CLEANING
-    // --------------------------------------------------------
-
-    std::string decodeEntities(const std::string& text)
-    {
-        std::string result = text;
-
-        const std::vector<std::pair<std::string, std::string>> entities =
-        {
-            {"&nbsp;", " "},
-            {"&#160;", " "},
-            {"&amp;", "&"},
-            {"&lt;", "<"},
-            {"&gt;", ">"},
-            {"&quot;", "\""},
-            {"&apos;", "'"},
-            {"&#39;", "'"}
-        };
-
-        for (std::size_t i = 0; i < entities.size(); ++i)
-        {
-            std::size_t position = 0;
-
-            while ((position = result.find(
-                entities[i].first, position)) != std::string::npos)
-            {
-                result.replace(
-                    position,
-                    entities[i].first.length(),
-                    entities[i].second
-                );
-
-                position += entities[i].second.length();
-            }
-        }
-
-        return result;
-    }
-
 
     std::string trim(const std::string& text)
     {
@@ -125,62 +103,85 @@ namespace
             return "";
 
         std::size_t last = text.find_last_not_of(" \t\r\n");
-
         return text.substr(first, last - first + 1);
     }
 
+    std::string toLower(std::string text)
+    {
+        for (char& c : text)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return text;
+    }
 
+    std::string toUpper(std::string text)
+    {
+        for (char& c : text)
+            c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return text;
+    }
+
+    bool containsNoCase(const std::string& text, const std::string& part)
+    {
+        return toLower(text).find(toLower(part)) != std::string::npos;
+    }
+
+    void replaceAll(std::string& text, const std::string& from, const std::string& to)
+    {
+        if (from.empty())
+            return;
+
+        std::size_t position = 0;
+
+        while ((position = text.find(from, position)) != std::string::npos)
+        {
+            text.replace(position, from.length(), to);
+            position += to.length();
+        }
+    }
+
+    std::string decodeEntities(const std::string& text)
+    {
+        std::string result = text;
+
+        const std::pair<const char*, const char*> entities[] = {
+            {"&nbsp;", " "}, {"&#160;", " "}, {"&amp;", "&"}, {"&lt;", "<"},
+            {"&gt;", ">"}, {"&quot;", "\""}, {"&apos;", "'"}, {"&#39;", "'"}
+        };
+
+        for (const auto& e : entities)
+            replaceAll(result, e.first, e.second);
+
+        return result;
+    }
+
+    // Decodes entities, repairs common encoding artefacts and collapses
+    // all whitespace to single spaces.
     std::string cleanCellText(const std::string& text)
     {
         std::string result = decodeEntities(text);
 
-        const std::vector<std::pair<std::string, std::string>> replacements =
-        {
-            {"\xC2\xA0", " "},
-            {"\xE2\x80\x99", "'"},
-            {"\xE2\x80\x93", "-"},
-            {"\xE2\x80\x94", "-"},
-            {"┬á", " "},
-            {"ΓÇÖ", "'"},
-            {"ΓÇô", "-"},
-            {"ΓÇö", "-"}
+        const std::pair<const char*, const char*> replacements[] = {
+            {"\xC2\xA0", " "}, {"\xE2\x80\x99", "'"}, {"\xE2\x80\x93", "-"},
+            {"\xE2\x80\x94", "-"}
         };
 
-        for (std::size_t i = 0; i < replacements.size(); ++i)
-        {
-            std::size_t position = 0;
-
-            while ((position = result.find(
-                replacements[i].first, position)) != std::string::npos)
-            {
-                result.replace(
-                    position,
-                    replacements[i].first.length(),
-                    replacements[i].second
-                );
-
-                position += replacements[i].second.length();
-            }
-        }
+        for (const auto& r : replacements)
+            replaceAll(result, r.first, r.second);
 
         std::string cleaned;
         bool previousSpace = false;
 
-        for (std::size_t i = 0; i < result.length(); ++i)
+        for (char c : result)
         {
-            unsigned char ch =
-                static_cast<unsigned char>(result[i]);
-
-            if (std::isspace(ch))
+            if (std::isspace(static_cast<unsigned char>(c)))
             {
                 if (!previousSpace && !cleaned.empty())
                     cleaned += ' ';
-
                 previousSpace = true;
             }
             else
             {
-                cleaned += static_cast<char>(ch);
+                cleaned += c;
                 previousSpace = false;
             }
         }
@@ -188,17 +189,14 @@ namespace
         return trim(cleaned);
     }
 
+    // ------------------------------------------------------------
+    // HTML tag helpers
+    // ------------------------------------------------------------
 
-    // --------------------------------------------------------
-    // HTML TAG HELPERS
-    // --------------------------------------------------------
-
-    std::string getAttributeValue(
-        const std::string& tag,
-        const std::string& attribute)
+    std::string getAttributeValue(const std::string& tag, const std::string& attribute)
     {
         std::regex expression(
-            attribute + R"(\s*=\s*["']?([^"'\s>]+)["']?)",
+            "\\b" + attribute + R"(\s*=\s*["']?([^"'\s>]+)["']?)",
             std::regex_constants::icase
         );
 
@@ -210,16 +208,13 @@ namespace
         return "";
     }
 
-
     std::string getTagName(const std::string& tag)
     {
         std::size_t position = 0;
 
         while (position < tag.length() &&
                std::isspace(static_cast<unsigned char>(tag[position])))
-        {
             ++position;
-        }
 
         if (position < tag.length() && tag[position] == '/')
             ++position;
@@ -230,27 +225,14 @@ namespace
         {
             char ch = tag[position];
 
-            if (!std::isalnum(static_cast<unsigned char>(ch)) &&
-                ch != '-' && ch != ':')
-            {
+            if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '-' && ch != ':')
                 break;
-            }
 
             ++position;
         }
 
-        std::string name = tag.substr(start, position - start);
-
-        for (std::size_t i = 0; i < name.length(); ++i)
-        {
-            name[i] = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(name[i]))
-            );
-        }
-
-        return name;
+        return toLower(tag.substr(start, position - start));
     }
-
 
     bool isClosingTag(const std::string& tag)
     {
@@ -258,600 +240,20 @@ namespace
 
         while (position < tag.length() &&
                std::isspace(static_cast<unsigned char>(tag[position])))
-        {
             ++position;
-        }
 
         return position < tag.length() && tag[position] == '/';
     }
 
-
-    std::string cleanReferenceField(const std::string& text)
-    {
-        std::string result = trim(text);
-
-        // Remove leading and trailing slashes.
-        while (!result.empty() && result.front() == '/')
-        {
-            result.erase(0, 1);
-            result = trim(result);
-        }
-
-        while (!result.empty() && result.back() == '/')
-        {
-            result.pop_back();
-            result = trim(result);
-        }
-
-        // Remove empty segments and join valid segments.
-        std::vector<std::string> segments =
-            splitCellSegments(result);
-
-        std::string cleaned;
-
-        for (std::size_t i = 0; i < segments.size(); ++i)
-        {
-            if (!cleaned.empty())
-                cleaned += " / ";
-
-            cleaned += segments[i];
-        }
-
-        return cleaned;
-    }
-
-
-    // Normalize a subject code for consistent lookup.
-    std::string normalizeCode(const std::string& code)
-    {
-        std::string result = trim(code);
-
-        result.erase(
-            std::remove_if(
-                result.begin(),
-                result.end(),
-                [](unsigned char ch)
-                {
-                    return std::isspace(ch);
-                }
-            ),
-            result.end()
-        );
-
-        for (std::size_t i = 0; i < result.length(); ++i)
-        {
-            result[i] = static_cast<char>(
-                std::toupper(static_cast<unsigned char>(result[i]))
-            );
-        }
-
-        return result;
-    }
-
-
-    // Extract all subject codes from a reference-table code cell.
-    // Handles codes such as TCS-302, toc-301 and PDCC-A 301.
-    std::vector<std::string> extractSubjectCodes(
-        const std::string& text)
-    {
-        std::vector<std::string> codes;
-
-        const std::regex codePattern(
-            R"(([A-Za-z]+(?:-[A-Za-z]+)?[- ]\s*\d{3}))"
-        );
-
-        std::sregex_iterator it(
-            text.begin(), text.end(), codePattern
-        );
-
-        std::sregex_iterator end;
-
-        for (; it != end; ++it)
-        {
-            std::string code = normalizeCode((*it)[1].str());
-
-            if (!code.empty() &&
-                std::find(codes.begin(), codes.end(), code) == codes.end())
-            {
-                codes.push_back(code);
-            }
-        }
-
-        return codes;
-    }
-
-
-    // Build the subject lookup from a section's reference table.
-    std::unordered_map<std::string, SubjectReference>
-    buildSubjectLookup(const ParsedTable& subjectTable)
-    {
-        std::unordered_map<std::string, SubjectReference> lookup;
-
-        // Row 0 contains the column headings.
-        for (std::size_t i = 1; i < subjectTable.rows.size(); ++i)
-        {
-            const ParsedRow& row = subjectTable.rows[i];
-
-            if (row.cells.size() < 3)
-                continue;
-
-            std::string rawCode = row.cells[0].text;
-            std::string subjectName =
-                cleanReferenceField(row.cells[1].text);
-            std::string faculty =
-                cleanReferenceField(row.cells[2].text);
-
-            std::vector<std::string> codes =
-                extractSubjectCodes(rawCode);
-
-            if (codes.empty())
-                continue;
-
-            for (std::size_t j = 0; j < codes.size(); ++j)
-            {
-                SubjectReference reference;
-
-                reference.code = codes[j];
-                reference.subjectName = subjectName;
-                reference.faculty = faculty;
-
-                lookup[codes[j]] = reference;
-            }
-        }
-
-        return lookup;
-    }
-
-
-
-    std::string extractRoom(const std::vector<std::string>& segments)
-    {
-        for (const std::string& segment : segments)
-        {
-            std::string room = trim(segment);
-            if (room.find("B.Tech.") != std::string::npos)
-                return room;
-
-            if (room.find("GEHU-Audi") != std::string::npos)
-                return room;
-
-            std::regex roomPattern(
-                R"((CR|LT)\s*-\s*\d+|Lab\s*-\s*\d+|Digital Lab\s*-\s*\d+)",
-                std::regex_constants::icase
-            );
-
-            std::smatch match;
-
-            if (std::regex_search(room, match, roomPattern))
-            {
-                room = match.str();
-
-                // Remove unnecessary spaces around hyphens.
-                room = std::regex_replace(
-                    room,
-                    std::regex(R"(\s*-\s*)"),
-                    "-"
-                );
-
-                // Normalize room prefixes.
-                std::transform(
-                    room.begin(),
-                    room.end(),
-                    room.begin(),
-                    [](unsigned char c)
-                    {
-                        return static_cast<char>(std::toupper(c));
-                    }
-                );
-
-                if (room.find("DIGITAL") != std::string::npos)
-                {
-                    return "Digital " + room.substr(8);
-                }
-
-                return room;
-            }
-
-            if (room.find("B.Tech.") != std::string::npos)
-                return room;
-
-            if (room.find("GEHU-Audi") != std::string::npos)
-                return room;
-
-            if (room.find("Online") != std::string::npos)
-                return "Online";
-        }
-
-        return "Unknown";
-    }
-
-
-    void inspectCellRooms(const ParsedTable& timetable)
-    {
-        std::cout << "\n========== CSE A ROOM EXTRACTION ==========\n";
-
-        for (std::size_t r = 1; r < timetable.rows.size(); ++r)
-        {
-            const ParsedRow& row = timetable.rows[r];
-
-            if (row.cells.empty())
-                continue;
-
-            std::string day = normalizeDay(row.cells[0].text);
-
-            int slotIndex = 0;
-
-            const std::vector<std::pair<std::string, std::string>> timeSlots =
-            {
-                {"08:00", "08:55"},
-                {"09:00", "09:55"},
-                {"09:55", "10:50"},
-                {"11:10", "12:05"},
-                {"12:05", "13:00"},
-                {"13:00", "13:55"},
-                {"13:55", "14:50"},
-                {"15:10", "16:05"},
-                {"16:05", "17:00"},
-                {"17:00", "17:55"}
-            };
-
-            for (std::size_t c = 1; c < row.cells.size(); ++c)
-            {
-                const ParsedCell& cell = row.cells[c];
-
-                int span = cell.colSpan;
-
-                if (span < 1)
-                    span = 1;
-
-                if (slotIndex >= static_cast<int>(timeSlots.size()))
-                    break;
-
-                int endSlot = slotIndex + span;
-
-                if (endSlot > static_cast<int>(timeSlots.size()))
-                    endSlot = static_cast<int>(timeSlots.size());
-
-                if (!cell.text.empty() && !isNonAcademic(cell.text))
-                {
-                    std::vector<std::string> segments =
-                        splitCellSegments(cell.text);
-
-                    std::string room = extractRoom(segments);
-
-                    std::cout << "\nDay: " << day
-                            << "\nTime: "
-                            << timeSlots[slotIndex].first
-                            << " - "
-                            << timeSlots[endSlot - 1].second
-                            << "\nContent: " << cell.text
-                            << "\nRoom: " << room
-                            << "\n------------------------------\n";
-                }
-
-                slotIndex += span;
-            }
-        }
-    }
-
-
-    std::string getGroup(const std::string& text)
-    {
-        std::regex groupPattern(R"(\(G\d+\))");
-        std::smatch match;
-
-        if (std::regex_search(text, match, groupPattern))
-            return match.str();
-
-        return "";
-    }
-
-    std::string getCleanSubjectCode(const std::string& text)
-    {
-        std::vector<std::string> codes = extractSubjectCodes(text);
-
-        if (!codes.empty())
-            return normalizeCode(codes[0]);
-
-        return "";
-    }
-
-    void addSession(
-        std::vector<Session>& sessions,
-        const std::string& subject,
-        const std::string& faculty,
-        const std::string& room,
-        const std::string& section,
-        const std::string& day,
-        const std::string& startTime,
-        const std::string& endTime,
-        int studentCount,
-        const std::string& group = "",
-        bool conditional = false)
-    {
-        std::string finalSubject = subject;
-
-        if (!group.empty())
-            finalSubject += " " + group;
-
-        // Preserve the Saturday-off marker.
-        if (conditional)
-            finalSubject += " *";
-
-        sessions.emplace_back(
-            finalSubject,
-            faculty,
-            room,
-            section,
-            day,
-            startTime,
-            endTime,
-            studentCount
-        );
-    }
-
-    std::string selectGroupFaculty(const std::string& faculty,const std::string& group)
-    {
-        std::string groupKey;
-
-        if (group.find("G1") != std::string::npos)
-            groupKey = "G1";
-        else if (group.find("G2") != std::string::npos)
-            groupKey = "G2";
-        else
-            return faculty;
-
-        std::string pattern;
-
-        if (groupKey == "G1")
-            pattern = R"(G1\s*-\s*(.*?)(?:\s*&\s*G2\s*-|$))";
-        else
-            pattern = R"(G2\s*-\s*(.*?)(?:$))";
-
-        std::regex facultyRegex(
-            pattern,
-            std::regex_constants::icase
-        );
-
-        std::smatch match;
-
-        if (std::regex_search(faculty, match, facultyRegex))
-            return trim(match[1].str());
-
-        return faculty;
-    }
-
-    std::string selectCareerSkillsFaculty(const std::string& cellText,const std::string& faculty)
-    {
-        std::string category;
-
-        if (cellText.find("QAR") != std::string::npos)
-            category = "QAR";
-        else if (cellText.find("Verbal") != std::string::npos)
-            category = "Verbal";
-        else if (cellText.find("Soft Skills") != std::string::npos)
-            category = "Soft Skills";
-        else
-            return faculty;
-
-        std::regex pattern(
-            category + R"(\s*-\s*([^/]+))",
-            std::regex_constants::icase
-        );
-
-        std::smatch match;
-
-        if (std::regex_search(faculty, match, pattern))
-            return trim(match[1].str());
-
-        return faculty;
-    }
- 
-    void generateSessionsFromTables(
-        const ParsedTable& timetable,
-        const ParsedTable& subjectTable,
-        std::vector<Session>& sessions,
-        const std::string& section)
-    {
-        if (timetable.rows.empty())
-            return;
-
-        std::unordered_map<std::string, SubjectReference> lookup =
-            buildSubjectLookup(subjectTable);
-
-        // Map physical HTML columns to the 10 actual timetable slots.
-        std::vector<int> columnToSlot;
-        int currentSlot = 0;
-
-        for (std::size_t c = 1; c < timetable.rows[0].cells.size(); c++)
-        {
-            const ParsedCell& headerCell = timetable.rows[0].cells[c];
-
-            for (int k = 0; k < headerCell.colSpan; k++)
-            {
-                columnToSlot.push_back(currentSlot);
-            }
-
-            currentSlot++;
-        }
-
-        // Process each day.
-        for (std::size_t r = 1; r < timetable.rows.size(); r++)
-        {
-            const ParsedRow& row = timetable.rows[r];
-
-            if (row.cells.empty())
-                continue;
-
-            std::string day = normalizeDay(row.cells[0].text);
-            int physicalColumn = 0;
-
-            // Process each timetable cell only once.
-            for (std::size_t c = 1; c < row.cells.size(); c++)
-            {
-                const ParsedCell& cell = row.cells[c];
-
-                // Skip duplicate final cell caused by the merged last timetable column
-                if (c > 1 &&
-                    cell.text == row.cells[c - 1].text &&
-                    row.cells[c - 1].colSpan > 1)
-                {
-                    continue;
-                }
-
-                int startPhysical = physicalColumn;
-                int endPhysical = physicalColumn + cell.colSpan - 1;
-
-                physicalColumn += cell.colSpan;
-
-                if (startPhysical < 0 ||
-                    endPhysical >= static_cast<int>(columnToSlot.size()))
-                {
-                    continue;
-                }
-
-                int startSlot = columnToSlot[startPhysical];
-                int endSlot = columnToSlot[endPhysical];
-
-                if (cell.text.empty() || isNonAcademic(cell.text))
-                    continue;
-
-                // Validate the mapped timetable slots.
-                if (startSlot < 0 || endSlot >= 10 || startSlot > endSlot)
-                {
-                    std::cout << "WARNING: Invalid time slot skipped\n";
-                    std::cout << "Section: " << section << '\n';
-                    std::cout << "Day: " << day << '\n';
-                    std::cout << "Content: " << cell.text << '\n';
-                    std::cout << "Slot range: " << startSlot
-                            << " - " << endSlot << "\n\n";
-
-                    continue;
-                }
-
-                std::string startTime = getSlotTime(startSlot, false);
-                std::string endTime = getSlotTime(endSlot, true);
-
-                std::vector<std::string> segments =
-                    splitCellSegments(cell.text);
-
-                // Handle parallel laboratory sessions.
-                std::vector<std::vector<std::string>> labs =
-                    splitParallelLabs(segments);
-
-                if (!labs.empty())
-                {
-                    for (const auto& lab : labs)
-                    {
-                        std::string code = getCleanSubjectCode(lab[0]);
-
-                        if (code.empty() || lookup.find(code) == lookup.end())
-                            continue;
-
-                        const SubjectReference& ref = lookup.at(code);
-
-                        std::string group = getGroup(lab[0]);
-
-                        std::string faculty = selectGroupFaculty(ref.faculty, group);
-
-                        bool conditional =
-                            !lab[0].empty() && lab[0][0] == '*';
-
-                        int count = 40;
-
-                        addSession(
-                            sessions,
-                            ref.subjectName,
-                            faculty,
-                            lab[1],
-                            section,
-                            day,
-                            startTime,
-                            endTime,
-                            count,
-                            group,
-                            conditional
-                        );
-                    }
-
-                    continue;
-                }
-
-                // Handle ordinary timetable entries.
-                std::string code = getCleanSubjectCode(cell.text);
-                std::string subject;
-                std::string faculty = "Not specified";
-                std::string room = extractRoom(segments);
-
-                bool conditional =
-                    cell.text.find('*') != std::string::npos;
-
-                int studentCount = 80;
-
-                if (!code.empty() && lookup.find(code) != lookup.end())
-                {
-                    const SubjectReference& ref = lookup.at(code);
-                    subject = ref.subjectName;
-                    faculty = ref.faculty;
-                }
-                else if (cell.text.find("Career Skills") != std::string::npos)
-                {
-                    subject = "Career Skills / PDCC";
-
-                    auto it = lookup.find("XCS-301");
-
-                    if (it != lookup.end())
-                        faculty = selectCareerSkillsFaculty(cell.text,it->second.faculty);
-                }
-                else if (cell.text.find("Elective") != std::string::npos)
-                {
-                    subject = "Elective";
-                    faculty = "Not specified";
-                    studentCount = 0;
-                }
-                else
-                {
-                    continue;
-                }
-
-                // Explicit G1/G2 lab sessions have 40 students.
-                if (cell.text.find("PCS-308") != std::string::npos ||
-                    cell.text.find("PCS-307") != std::string::npos)
-                {
-                    studentCount = 40;
-                }
-
-                std::string group = getGroup(cell.text);
-                faculty = selectGroupFaculty(faculty, group);
-
-                addSession(
-                    sessions,
-                    subject,
-                    faculty,
-                    room,
-                    section,
-                    day,
-                    startTime,
-                    endTime,
-                    studentCount,
-                    group,
-                    conditional
-                );
-            }
-        }
-    }
-
-
-    // --------------------------------------------------------
-    // HTML TABLE PARSER
-    // --------------------------------------------------------
+    // ------------------------------------------------------------
+    // HTML table parser (top-level tables only)
+    // ------------------------------------------------------------
 
     std::vector<ParsedTable> parseTables(const std::string& html)
     {
         std::vector<ParsedTable> tables;
 
         int tableDepth = 0;
-
         bool insideRow = false;
         bool insideCell = false;
 
@@ -867,16 +269,9 @@ namespace
             if (tagStart == std::string::npos)
                 break;
 
-            // Collect text inside a table cell.
             if (insideCell && tableDepth == 1 && tagStart > position)
-            {
-                currentCell.text += html.substr(
-                    position,
-                    tagStart - position
-                );
-            }
+                currentCell.text += html.substr(position, tagStart - position);
 
-            // Skip HTML comments.
             if (html.compare(tagStart, 4, "<!--") == 0)
             {
                 std::size_t commentEnd = html.find("-->", tagStart + 4);
@@ -893,11 +288,7 @@ namespace
             if (tagEnd == std::string::npos)
                 break;
 
-            std::string tag = html.substr(
-                tagStart + 1,
-                tagEnd - tagStart - 1
-            );
-
+            std::string tag = html.substr(tagStart + 1, tagEnd - tagStart - 1);
             std::string tagName = getTagName(tag);
             bool closing = isClosingTag(tag);
 
@@ -910,10 +301,9 @@ namespace
                     if (tableDepth == 1)
                         tables.push_back(ParsedTable());
                 }
-                else
+                else if (tableDepth > 0)
                 {
-                    if (tableDepth > 0)
-                        --tableDepth;
+                    --tableDepth;
                 }
             }
             else if (tableDepth == 1)
@@ -953,437 +343,785 @@ namespace
 
                         currentCell = ParsedCell();
 
-                        std::string colSpan =
-                            getAttributeValue(tag, "colspan");
+                        std::string colSpan = getAttributeValue(tag, "colspan");
+                        std::string rowSpan = getAttributeValue(tag, "rowspan");
+                        std::string width   = getAttributeValue(tag, "width");
 
-                        std::string rowSpan =
-                            getAttributeValue(tag, "rowspan");
+                        if (!colSpan.empty()) currentCell.colSpan = std::atoi(colSpan.c_str());
+                        if (!rowSpan.empty()) currentCell.rowSpan = std::atoi(rowSpan.c_str());
+                        if (!width.empty())   currentCell.width   = std::atoi(width.c_str());
 
-                        if (!colSpan.empty())
-                            currentCell.colSpan = std::atoi(colSpan.c_str());
-
-                        if (!rowSpan.empty())
-                            currentCell.rowSpan = std::atoi(rowSpan.c_str());
-
-                        if (currentCell.colSpan < 1)
-                            currentCell.colSpan = 1;
-
-                        if (currentCell.rowSpan < 1)
-                            currentCell.rowSpan = 1;
+                        if (currentCell.colSpan < 1) currentCell.colSpan = 1;
+                        if (currentCell.rowSpan < 1) currentCell.rowSpan = 1;
+                        if (currentCell.width < 0)   currentCell.width = 0;
 
                         insideCell = true;
                     }
-                    else
+                    else if (insideCell)
                     {
-                        if (insideCell)
-                        {
-                            currentRow.cells.push_back(currentCell);
-                            currentCell = ParsedCell();
-                            insideCell = false;
-                        }
+                        currentRow.cells.push_back(currentCell);
+                        currentCell = ParsedCell();
+                        insideCell = false;
                     }
                 }
-                else if (insideCell && !closing &&
-                         (tagName == "br" ||
-                          tagName == "p" ||
-                          tagName == "div"))
+                else if (insideCell && (tagName == "br" || tagName == "p" || tagName == "div"))
                 {
-                    currentCell.text += " / ";
-                }
-                else if (insideCell && closing &&
-                         (tagName == "p" || tagName == "div"))
-                {
-                    currentCell.text += " / ";
+                    if (!closing || tagName != "br")
+                        currentCell.text += " / ";
                 }
             }
 
             position = tagEnd + 1;
         }
 
-        // Clean the text in all parsed cells.
-        for (std::size_t t = 0; t < tables.size(); ++t)
-        {
-            for (std::size_t r = 0; r < tables[t].rows.size(); ++r)
-            {
-                for (std::size_t c = 0;
-                     c < tables[t].rows[r].cells.size(); ++c)
-                {
-                    tables[t].rows[r].cells[c].text =
-                        cleanCellText(
-                            tables[t].rows[r].cells[c].text
-                        );
-                }
-            }
-        }
+        for (ParsedTable& table : tables)
+            for (ParsedRow& row : table.rows)
+                for (ParsedCell& cell : row.cells)
+                    cell.text = cleanCellText(cell.text);
 
         return tables;
     }
 
-
-    // --------------------------------------------------------
-    // DAY AND CELL PROCESSING
-    // --------------------------------------------------------
-
-    std::string normalizeDay(const std::string& day)
+    // Plain text of the whole page (used only to read the section headings).
+    std::string stripTags(const std::string& html)
     {
-        std::string value = day;
+        std::string text;
+        text.reserve(html.size() / 2);
+        bool inTag = false;
 
-        // Remove slashes and surrounding spaces.
-        for (std::size_t i = 0; i < value.length(); ++i)
+        for (char c : html)
         {
-            if (value[i] == '/')
-                value[i] = ' ';
+            if (c == '<')      { inTag = true; text += ' '; }
+            else if (c == '>') { inTag = false; }
+            else if (!inTag)   { text += c; }
         }
 
-        value = trim(value);
-
-        if (value == "Mon" || value == "Monday")
-            return "Monday";
-        if (value == "Tue" || value == "Tuesday")
-            return "Tuesday";
-        if (value == "Wed" || value == "Wednesday")
-            return "Wednesday";
-        if (value == "Thu" || value == "Thursday")
-            return "Thursday";
-        if (value == "Fri" || value == "Friday")
-            return "Friday";
-        if (value == "Sat" || value == "Saturday")
-            return "Saturday";
-
-        return value;
+        return cleanCellText(text);
     }
 
+    // "Section-A" -> "A", "Section: AI-DS1" -> "AIDS1", "-Cyber" -> "CYBER".
+    std::string canonicalSectionName(const std::string& raw)
+    {
+        std::string name;
+
+        for (char c : toUpper(raw))
+            if (std::isalnum(static_cast<unsigned char>(c)))
+                name += c;
+
+        if (name.compare(0, 7, "SECTION") == 0 && name.size() > 7)
+            name = name.substr(7);
+
+        return name;
+    }
+
+    std::vector<std::string> extractSectionNames(const std::string& html)
+    {
+        std::vector<std::string> names;
+        const std::string text = stripTags(html);
+        const std::regex headingPattern(
+            R"(^\.?\s*-\s*\(?\s*(?:Section\s*[-:]?\s*)?([A-Za-z0-9][A-Za-z0-9-]*)\s*\)?\s*$)",
+            std::regex_constants::icase);
+
+        std::size_t position = 0;
+
+        while ((position = text.find("ENGG", position)) != std::string::npos)
+        {
+            std::size_t end = text.find("ACADEMIC", position);
+
+            if (end == std::string::npos)
+                break;
+
+            // Text between "ENGG" and "ACADEMIC", e.g. ". - (Section-A)".
+            std::string between = text.substr(position + 4, end - position - 4);
+            std::smatch match;
+
+            if (std::regex_match(between, match, headingPattern))
+                names.push_back(canonicalSectionName(match[1].str()));
+
+            position = end;
+        }
+
+        return names;
+    }
+
+    // ------------------------------------------------------------
+    // Cell text splitting and normalisation
+    // ------------------------------------------------------------
 
     std::vector<std::string> splitCellSegments(const std::string& text)
     {
         std::vector<std::string> segments;
-
         std::string current;
 
-        for (std::size_t i = 0; i < text.length(); ++i)
+        for (char c : text)
         {
-            if (text[i] == '/')
+            if (c == '/')
             {
                 current = trim(current);
-
                 if (!current.empty())
                     segments.push_back(current);
-
                 current.clear();
             }
             else
             {
-                current += text[i];
+                current += c;
             }
         }
 
         current = trim(current);
-
         if (!current.empty())
             segments.push_back(current);
 
         return segments;
     }
 
-
-    std::vector<std::vector<std::string>> splitParallelLabs(
-        const std::vector<std::string>& segments)
+    // Joins the non-empty "/" separated pieces with " / ".
+    std::string cleanReferenceField(const std::string& text)
     {
-        std::vector<std::vector<std::string>> labs;
+        std::string cleaned;
 
-        // A parallel lab cell follows this structure:
-        // Subject 1 / Room 1 / Subject 2 with Room 2
-
-        if (segments.size() < 3)
-            return labs;
-
-        std::string firstSubject = trim(segments[0]);
-        std::string firstRoom = trim(segments[1]);
-        std::string secondPart = trim(segments[2]);
-
-        // Check whether this is actually a parallel lab cell.
-        if (firstSubject.find("PCS-") == std::string::npos ||
-            firstSubject.find("Lab") == std::string::npos ||
-            secondPart.find("PCS-") == std::string::npos)
+        for (const std::string& segment : splitCellSegments(text))
         {
-            return labs;
+            if (!cleaned.empty())
+                cleaned += " / ";
+            cleaned += segment;
         }
 
-        // Extract the second lab's room from its subject segment.
-        std::regex secondLabPattern(R"(Lab\s*-\s*\d+)",
-                                    std::regex_constants::icase);
+        return cleaned;
+    }
+
+    // "tcs302", "TCS 302" and "TCS-302" all become "TCS-302";
+    // "PDCC-A 301" becomes "PDCC-A-301".
+    std::string normalizeCode(const std::string& code)
+    {
+        std::string result;
+
+        for (char c : code)
+            if (!std::isspace(static_cast<unsigned char>(c)))
+                result += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+
+        static const std::regex pattern(R"(^([A-Z]+(?:-[A-Z]+)?)-?(\d{3})$)");
+        std::smatch match;
+
+        if (std::regex_match(result, match, pattern))
+            return match[1].str() + "-" + match[2].str();
+
+        return result;
+    }
+
+    // All subject codes in a text. Also expands "TCS-561/586" to
+    // TCS-561 and TCS-586.
+    std::vector<std::string> extractSubjectCodes(const std::string& text)
+    {
+        std::vector<std::string> codes;
+
+        static const std::regex codePattern(
+            R"(([A-Za-z]+(?:-[A-Za-z]+)?[- ]?\s*\d{3})(?:\s*/\s*(\d{3})\b)?)");
+
+        for (std::sregex_iterator it(text.begin(), text.end(), codePattern), end;
+             it != end; ++it)
+        {
+            std::string first = normalizeCode((*it)[1].str());
+            std::vector<std::string> found = { first };
+
+            if ((*it)[2].matched && first.size() > 3)
+                found.push_back(first.substr(0, first.size() - 3) + (*it)[2].str());
+
+            for (const std::string& code : found)
+                if (!code.empty() &&
+                    std::find(codes.begin(), codes.end(), code) == codes.end())
+                    codes.push_back(code);
+        }
+
+        return codes;
+    }
+
+    // ------------------------------------------------------------
+    // Rooms
+    // ------------------------------------------------------------
+
+    // Returns one canonical room name for a cell (or part of a cell).
+    //   LT-5, CR-7, Lab-2, New Lab-1, Digital Lab-1, GEHU-Audi (5th Floor),
+    //   B.Tech. Block IInd Floor Lab-1, Aryabhatt Ground Floor Lab, Online.
+    // "Lab-7 & Lab-6" (one session in two labs) is returned as written.
+    std::string extractRoom(const std::string& rawText)
+    {
+        std::string text = rawText;
+        replaceAll(text, "/", " ");
+
+        static const std::regex floorLab(
+            R"(B\.?\s*Tech\.?\s*Block\s*IInd\s*Floor\s*Lab\s*-\s*(\d+))",
+            std::regex_constants::icase);
+        static const std::regex groundLab(
+            R"((Aryabhatt|Param)\s*Ground\s*Floor)", std::regex_constants::icase);
+        static const std::regex hpcLab(
+            R"(CAI-HPC-NVIDIA)", std::regex_constants::icase);
+        static const std::regex audi(
+            R"(GEHU-Audi)", std::regex_constants::icase);
+        static const std::regex lab(
+            R"(\b(New|Digital)?\s*Lab\s*-\s*(\d+))", std::regex_constants::icase);
+        static const std::regex lecture(
+            R"(\b(CR|LT)\s*-?\s*(\d+))", std::regex_constants::icase);
 
         std::smatch match;
 
-        if (!std::regex_search(secondPart, match, secondLabPattern))
-            return labs;
+        if (std::regex_search(text, match, floorLab))
+            return "B.Tech. Block IInd Floor Lab-" + match[1].str();
 
-        std::string secondRoom = match.str();
-
-        secondRoom = std::regex_replace(
-            secondRoom,
-            std::regex(R"(\s*-\s*)"),
-            "-"
-        );
-
-        std::string secondSubject =
-            trim(secondPart.substr(0, match.position()));
-
-        labs.push_back({firstSubject, firstRoom});
-        labs.push_back({secondSubject, secondRoom});
-
-        return labs;
-    }
-
-
-    std::string getSlotTime(int slot, bool isEnd)
-    {
-        const std::string startTimes[] = {
-            "08:00", "09:00", "09:55", "11:10", "12:05",
-            "13:00", "13:55", "15:10", "16:05", "17:00"
-        };
-
-        const std::string endTimes[] = {
-            "08:55", "09:55", "10:50", "12:05", "13:00",
-            "13:55", "14:50", "16:05", "17:00", "17:55"
-        };
-
-        if (slot < 0 || slot >= 10)
-            return "Invalid";
-
-        return isEnd ? endTimes[slot] : startTimes[slot];
-    }
-
-
-    void inspectParallelLabs(const ParsedTable& table)
-    {
-        std::cout << "\n========== PARALLEL LAB TEST ==========\n";
-
-        for (std::size_t r = 1; r < table.rows.size(); r++)
+        if (std::regex_search(text, match, groundLab))
         {
-            const ParsedRow& row = table.rows[r];
+            std::string name = toLower(match[1].str());
+            name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+            return name + " Ground Floor Lab";
+        }
+
+        if (std::regex_search(text, match, hpcLab))
+            return "CAI-HPC-NVIDIA Lab";
+
+        if (std::regex_search(text, match, audi))
+            return "GEHU-Audi (5th Floor)";
+
+        std::vector<std::string> labs;
+
+        for (std::sregex_iterator it(text.begin(), text.end(), lab), end; it != end; ++it)
+        {
+            std::string prefix;
+
+            if ((*it)[1].matched)
+            {
+                prefix = toLower((*it)[1].str());
+                prefix[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(prefix[0])));
+                prefix += " ";
+            }
+
+            std::string name = prefix + "Lab-" + (*it)[2].str();
+
+            if (std::find(labs.begin(), labs.end(), name) == labs.end())
+                labs.push_back(name);
+        }
+
+        if (!labs.empty())
+        {
+            std::string joined = labs[0];
+            for (std::size_t i = 1; i < labs.size(); ++i)
+                joined += " & " + labs[i];
+            return joined;
+        }
+
+        if (std::regex_search(text, match, lecture))
+            return toUpper(match[1].str()) + "-" + match[2].str();
+
+        if (containsNoCase(text, "online"))
+            return "Online";
+
+        return "Unknown";
+    }
+
+    // ------------------------------------------------------------
+    // Reference table
+    // ------------------------------------------------------------
+
+    SectionReference buildReference(const ParsedTable& table)
+    {
+        SectionReference ref;
+
+        for (std::size_t i = 1; i < table.rows.size(); ++i)
+        {
+            const ParsedRow& row = table.rows[i];
+
+            // Two-cell rows: "Career Excellence Classes (CEC) LT-6 | Faculty".
+            if (row.cells.size() == 2)
+            {
+                if (containsNoCase(row.cells[0].text, "Career Excellence"))
+                {
+                    ref.cecByRoom.push_back({
+                        extractRoom(row.cells[0].text),
+                        cleanReferenceField(row.cells[1].text)
+                    });
+                }
+
+                continue;
+            }
+
+            if (row.cells.size() < 3)
+                continue;
+
+            const std::string name = cleanReferenceField(row.cells[1].text);
+            const std::string faculty = cleanReferenceField(row.cells[2].text);
+
+            if (row.cells[0].text.empty())
+            {
+                if (containsNoCase(name, "IKS"))
+                    ref.iksFaculty = faculty;
+                continue;
+            }
+
+            for (const std::string& code : extractSubjectCodes(row.cells[0].text))
+            {
+                SubjectReference reference;
+                reference.code = code;
+                reference.subjectName = name;
+                reference.faculty = faculty;
+                ref.byCode[code] = reference;
+            }
+        }
+
+        return ref;
+    }
+
+    // ------------------------------------------------------------
+    // Cell classification
+    // ------------------------------------------------------------
+
+    // Returns a subject name for LUNCH / LIB / SWAYAM-Training cells,
+    // or "" for anything else. These are kept in the timetable;
+    // ClashDetector decides they never occupy a room or a teacher.
+    std::string freeActivityName(const std::string& text)
+    {
+        const std::string lower = toLower(text);
+
+        if (lower.find("lunch") != std::string::npos)
+            return "LUNCH";
+
+        if (trim(lower) == "lib")
+            return "LIB";
+
+        if (lower.find("training") != std::string::npos ||
+            lower.find("extra-curricular") != std::string::npos ||
+            lower.find("extracurricular") != std::string::npos)
+        {
+            std::string name = text;
+            replaceAll(name, " / ", "/");
+            replaceAll(name, " /", "/");
+            replaceAll(name, "/ ", "/");
+            return name;
+        }
+
+        return "";
+    }
+
+    // A cell holding two parallel lab groups looks like
+    //   "PCS-308 Lab (G1) B.Tech. Block IInd Floor Lab-1 / PCS-307 (G2) Lab-5"
+    //   "G2-PCS-511(S) Lab New Lab-1 & / G1-PCS-503 Lab New Lab-2"
+    // It is cut at every lab code ("PCS-nnn", optionally with "*" or "Gn-" in front).
+    std::vector<std::string> splitIntoParts(const std::string& text)
+    {
+        static const std::regex labCode(
+            R"(\*?\s*(?:G\d+\s*-\s*)?P[A-Z]{2}\s*-\s*\d{3})");
+
+        std::vector<std::size_t> starts;
+
+        for (std::sregex_iterator it(text.begin(), text.end(), labCode), end; it != end; ++it)
+            starts.push_back(static_cast<std::size_t>(it->position()));
+
+        std::vector<std::string> parts;
+
+        if (starts.size() < 2)
+        {
+            parts.push_back(text);
+            return parts;
+        }
+
+        for (std::size_t i = 0; i < starts.size(); ++i)
+        {
+            std::size_t end = (i + 1 < starts.size()) ? starts[i + 1] : text.size();
+            parts.push_back(trim(text.substr(starts[i], end - starts[i])));
+        }
+
+        return parts;
+    }
+
+    // "(G1)" from "Lab (G1)" or "G1-PCS-503".
+    std::string getGroup(const std::string& text)
+    {
+        static const std::regex groupPattern(R"(\(\s*G(\d+)\s*\)|\bG(\d+)\s*-\s*P)");
+        std::smatch match;
+
+        if (std::regex_search(text, match, groupPattern))
+            return "(G" + (match[1].matched ? match[1].str() : match[2].str()) + ")";
+
+        return "";
+    }
+
+    // "G1 - X & G2 - Y" -> the name that belongs to the given group.
+    std::string selectGroupFaculty(const std::string& faculty, const std::string& group)
+    {
+        std::string key;
+
+        if (group.find("G1") != std::string::npos)      key = "G1";
+        else if (group.find("G2") != std::string::npos) key = "G2";
+        else return faculty;
+
+        const std::regex pattern(
+            key == "G1" ? R"(G1\s*-\s*(.*?)(?:\s*&\s*G2\s*-|$))" : R"(G2\s*-\s*(.*?)$)",
+            std::regex_constants::icase);
+
+        std::smatch match;
+
+        if (std::regex_search(faculty, match, pattern))
+            return trim(match[1].str());
+
+        return faculty;
+    }
+
+    // "QAR-Ms. A / Verbal-Ms. B / Soft Skills-Mr. C" -> the name for the
+    // category written in the timetable cell. "" when the cell names none.
+    std::string selectCareerSkillsFaculty(const std::string& cellText, const std::string& faculty)
+    {
+        std::string category;
+
+        if (cellText.find("QAR") != std::string::npos)               category = "QAR";
+        else if (containsNoCase(cellText, "Verbal"))                 category = "Verbal";
+        else if (containsNoCase(cellText, "Soft Skills"))            category = "Soft Skills";
+        else return "";
+
+        const std::regex pattern(category + R"(\s*-\s*([^/]+))", std::regex_constants::icase);
+        std::smatch match;
+
+        if (std::regex_search(faculty, match, pattern))
+            return trim(match[1].str());
+
+        return "";
+    }
+
+    void addSession(std::vector<Session>& sessions, BuildStats& stats,
+                    const std::string& subject, const std::string& faculty,
+                    const std::string& room, const std::string& section,
+                    const std::string& day, const std::string& start,
+                    const std::string& end, int studentCount, WeekRule rule)
+    {
+        sessions.emplace_back(subject, faculty, room, section, day,
+                              start, end, studentCount, rule);
+        ++stats.sessions;
+    }
+
+    // One lecture / lab entry (a single part of a cell).
+    void processPart(const std::string& part, const SectionReference& ref,
+                     const std::string& section, const std::string& day,
+                     const std::string& start, const std::string& end,
+                     std::vector<Session>& sessions, BuildStats& stats)
+    {
+        // The "*" means: this class is held only when Saturday is off.
+        const WeekRule rule = (part.find('*') != std::string::npos)
+                                  ? WeekRule::SaturdayOffOnly
+                                  : WeekRule::Always;
+
+        std::string room = extractRoom(part);
+        const std::string group = getGroup(part);
+
+        std::string subject;
+        std::string faculty;
+        int students = 80;
+
+        static const std::regex careerPattern(R"(Career\s*S?kills)", std::regex_constants::icase);
+        static const std::regex iksPattern(R"(^\W*IKS\b)", std::regex_constants::icase);
+
+        if (containsNoCase(part, "Career Excellence"))
+        {
+            subject = "Career Excellence Classes (CEC)";
+
+            for (const auto& entry : ref.cecByRoom)
+                if (entry.first == room)
+                    faculty = entry.second;
+
+            if (faculty.empty() && ref.cecByRoom.size() == 1)
+                faculty = ref.cecByRoom[0].second;
+        }
+        else if (std::regex_search(part, careerPattern))
+        {
+            subject = "Career Skills / PDCC";
+
+            for (const auto& entry : ref.byCode)
+            {
+                if (entry.first.compare(0, 3, "XCS") == 0)
+                {
+                    faculty = selectCareerSkillsFaculty(part, entry.second.faculty);
+                    break;
+                }
+            }
+
+            if (faculty.empty())
+                stats.note(section + " " + day + ": Career Skills cell without QAR/Verbal/Soft Skills: " + part);
+        }
+        else if (std::regex_search(part, iksPattern))
+        {
+            subject = "IKS (Online)";
+            faculty = ref.iksFaculty;
+            room = "Online";
+        }
+        else
+        {
+            const std::vector<std::string> codes = extractSubjectCodes(part);
+
+            for (const std::string& code : codes)
+            {
+                auto found = ref.byCode.find(code);
+
+                if (found == ref.byCode.end())
+                    continue;
+
+                if (!subject.empty())
+                    subject += " / ";
+
+                subject += found->second.subjectName;
+
+                if (faculty.empty())
+                    faculty = found->second.faculty;
+            }
+
+            if (subject.empty())
+            {
+                ++stats.unmatched;
+                stats.note(section + " " + day + " " + start + ": no subject match for \"" + part + "\"");
+                subject = codes.empty() ? part : codes[0];
+            }
+        }
+
+        if (!group.empty())
+        {
+            faculty = selectGroupFaculty(faculty, group);
+            subject += " " + group;
+            students = 40;               // G1 / G2 = half of a section
+        }
+
+        if (room == "Unknown" && !containsNoCase(part, "Swayam") &&
+            !containsNoCase(part, "Audit"))
+        {
+            ++stats.unknownRoom;
+            stats.note(section + " " + day + " " + start + ": no room found in \"" + part + "\"");
+        }
+
+        addSession(sessions, stats, subject, faculty, room, section, day,
+                   start, end, students, rule);
+    }
+
+    void processCell(const std::string& rawText, const SectionReference& ref,
+                     const std::string& section, const std::string& day,
+                     const std::string& start, const std::string& end,
+                     std::vector<Session>& sessions, BuildStats& stats)
+    {
+        // <p> and <br> tags leave stray " / " separators; keep only real text.
+        const std::string text = cleanReferenceField(rawText);
+        const std::string freeName = freeActivityName(text);
+
+        if (!freeName.empty())
+        {
+            addSession(sessions, stats, freeName, "", "", section, day,
+                       start, end, 0, WeekRule::Always);
+            return;
+        }
+
+        if (toLower(trim(text)) == "elective")
+        {
+            addSession(sessions, stats, "Elective", "", "", section, day,
+                       start, end, 0, WeekRule::Always);
+            return;
+        }
+
+        for (const std::string& part : splitIntoParts(text))
+            processPart(part, ref, section, day, start, end, sessions, stats);
+    }
+
+    // ------------------------------------------------------------
+    // Days and slots
+    // ------------------------------------------------------------
+
+    std::string normalizeDay(const std::string& day)
+    {
+        std::string value = day;
+        replaceAll(value, "/", " ");          // cells contain " / " from <p>/<br>
+        value = toLower(trim(value));
+
+        const char* const full[6] = {"monday", "tuesday", "wednesday",
+                                     "thursday", "friday", "saturday"};
+
+        for (const char* name : full)
+        {
+            std::string n = name;
+
+            if (value == n || value == n.substr(0, 3))
+            {
+                n[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(n[0])));
+                return n;
+            }
+        }
+
+        return "";
+    }
+
+    // Where each of the ten time slots sits horizontally (in HTML pixels).
+    //
+    // The Word-generated tables do not have a clean column grid: a header
+    // cell may span two columns while a body cell below it spans one, so
+    // counting columns places some classes in the wrong slot (it put Section
+    // G's Monday TMA-316 on top of a lab). The cell widths are reliable, so a
+    // cell belongs to every slot whose centre lies inside the cell.
+    struct SlotGrid
+    {
+        std::vector<std::pair<int, int>> ranges;
+        std::vector<int> columnToSlot;      // fallback when widths are missing
+        bool valid = false;
+    };
+
+    SlotGrid buildSlotGrid(const ParsedRow& header)
+    {
+        SlotGrid grid;
+
+        if (header.cells.empty())
+            return grid;
+
+        int x = header.cells[0].width;
+        bool widthsKnown = x > 0;
+        int slot = 0;
+
+        for (std::size_t c = 1; c < header.cells.size(); ++c)
+        {
+            const ParsedCell& cell = header.cells[c];
+
+            if (cell.width <= 0)
+                widthsKnown = false;
+
+            grid.ranges.push_back({x, x + cell.width});
+            x += cell.width;
+
+            for (int k = 0; k < cell.colSpan; ++k)
+                grid.columnToSlot.push_back(slot);
+
+            ++slot;
+        }
+
+        grid.valid = widthsKnown && grid.ranges.size() == 10;
+        return grid;
+    }
+
+    void generateSessionsFromTables(const ParsedTable& timetable,
+                                    const ParsedTable& referenceTable,
+                                    std::vector<Session>& sessions,
+                                    const std::string& section,
+                                    BuildStats& stats)
+    {
+        if (timetable.rows.empty())
+            return;
+
+        const SectionReference ref = buildReference(referenceTable);
+        const SlotGrid grid = buildSlotGrid(timetable.rows[0]);
+
+        for (std::size_t r = 1; r < timetable.rows.size(); ++r)
+        {
+            const ParsedRow& row = timetable.rows[r];
 
             if (row.cells.empty())
                 continue;
 
-            std::string day = normalizeDay(row.cells[0].text);
+            const std::string day = normalizeDay(row.cells[0].text);
 
-            int slot = 0;
+            if (day.empty())
+                continue;                        // blank or footer row
 
-            for (std::size_t c = 1; c < row.cells.size(); c++)
+            int x = row.cells[0].width;
+            int physicalColumn = 0;
+
+            for (std::size_t c = 1; c < row.cells.size(); ++c)
             {
                 const ParsedCell& cell = row.cells[c];
 
-                int startSlot = slot;
-                int endSlot = slot + cell.colSpan - 1;
-                slot += cell.colSpan;
+                int firstSlot = -1;
+                int lastSlot = -1;
 
-                if (cell.text.empty() || isNonAcademic(cell.text))
-                    continue;
-
-                std::vector<std::string> segments =
-                    splitCellSegments(cell.text);
-
-                std::vector<std::vector<std::string>> labs =
-                    splitParallelLabs(segments);
-
-                if (labs.empty())
-                    continue;
-
-                std::cout << "\nDay: " << day << '\n';
-                std::cout << "Time: "
-                        << getSlotTime(startSlot, false) << " - "
-                        << getSlotTime(endSlot, true) << '\n';
-
-                for (const auto& lab : labs)
+                if (grid.valid && cell.width > 0)
                 {
-                    std::cout << "Subject: " << lab[0] << '\n';
-                    std::cout << "Room: " << lab[1] << "\n";
-                    std::cout << "-------------------------\n";
+                    for (int s = 0; s < 10; ++s)
+                    {
+                        const int centre = (grid.ranges[s].first + grid.ranges[s].second) / 2;
+
+                        if (centre >= x && centre < x + cell.width)
+                        {
+                            if (firstSlot < 0) firstSlot = s;
+                            lastSlot = s;
+                        }
+                    }
                 }
+                else
+                {
+                    const int a = physicalColumn;
+                    const int b = physicalColumn + cell.colSpan - 1;
+
+                    if (b < static_cast<int>(grid.columnToSlot.size()))
+                    {
+                        firstSlot = grid.columnToSlot[a];
+                        lastSlot = grid.columnToSlot[b];
+                    }
+                }
+
+                x += cell.width;
+                physicalColumn += cell.colSpan;
+
+                if (cell.text.empty())
+                    continue;
+
+                ++stats.cells;
+
+                if (firstSlot < 0 || lastSlot < firstSlot)
+                {
+                    ++stats.badGeometry;
+                    stats.note(section + " " + day + ": cell outside the time grid: " + cell.text);
+                    continue;
+                }
+
+                processCell(cell.text, ref, section, day,
+                            SLOT_START[firstSlot], SLOT_END[lastSlot],
+                            sessions, stats);
             }
         }
     }
 
-    bool isNonAcademic(const std::string& text)
+    void printStats(const BuildStats& stats)
     {
-        std::string value = text;
+        std::cout << "Timetable cells read: " << stats.cells
+                  << " | sessions created: " << stats.sessions << '\n';
 
-        for (std::size_t i = 0; i < value.length(); ++i)
+        if (stats.unmatched || stats.unknownRoom || stats.badGeometry)
         {
-            value[i] = static_cast<char>(
-                std::tolower(static_cast<unsigned char>(value[i]))
-            );
-        }
+            std::cout << "Parser warnings: " << stats.unmatched << " unmatched subject(s), "
+                      << stats.unknownRoom << " cell(s) without a room, "
+                      << stats.badGeometry << " cell(s) outside the grid\n";
 
-        return value.find("lunch") != std::string::npos ||
-               value.find("lib") != std::string::npos ||
-               value.find("swayam/training") != std::string::npos ||
-               value.find("extra-curricular") != std::string::npos ||
-               value.find("csp-301") != std::string::npos;
-    }
-
-
-    bool isLabSubject(const std::string& text)
-    {
-        return text.find("PCS-") != std::string::npos &&
-               text.find("Lab") != std::string::npos;
-    }
-
-
-    bool extractEmbeddedLab(
-        const std::string& text,
-        std::string& subject,
-        std::string& room)
-    {
-        std::regex roomPattern(
-            R"(\bLab\s*-\s*\d+\s*$)",
-            std::regex_constants::icase
-        );
-
-        std::smatch match;
-
-        if (!std::regex_search(text, match, roomPattern))
-            return false;
-
-        room = trim(match.str());
-
-        subject = trim(text.substr(
-            0,
-            static_cast<std::size_t>(match.position())
-        ));
-
-        subject += " Lab";
-
-        return true;
-    }
-
-
-    // Print a cleaned cell, splitting parallel lab sessions.
-    void printCleanedCell(
-        const std::string& day,
-        const std::string& startTime,
-        const std::string& endTime,
-        const std::string& rawText)
-    {
-        std::vector<std::string> segments =
-            splitCellSegments(rawText);
-
-        if (segments.empty() || isNonAcademic(rawText))
-            return;
-
-        // Identify two parallel lab sessions.
-        if (segments.size() >= 3 && isLabSubject(segments[0]))
-        {
-            std::string firstSubject = segments[0];
-            std::string firstRoom = segments[1];
-
-            std::string secondSubject;
-            std::string secondRoom;
-
-            if (extractEmbeddedLab(
-                segments[2], secondSubject, secondRoom))
-            {
-                std::cout << "\n[LAB SESSION 1]"
-                        << "\nDay: " << day
-                        << "\nSubject: " << firstSubject
-                        << "\nRoom: " << firstRoom
-                        << "\nTime: " << startTime
-                        << " - " << endTime
-                        << "\n";
-
-                std::cout << "\n[LAB SESSION 2]"
-                        << "\nDay: " << day
-                        << "\nSubject: " << secondSubject
-                        << "\nRoom: " << secondRoom
-                        << "\nTime: " << startTime
-                        << " - " << endTime
-                        << "\n";
-
-                return;
-            }
-        }
-
-        std::cout << "\nDay: " << day
-                << "\nTime: " << startTime
-                << " - " << endTime
-                << "\nContent: ";
-
-        for (std::size_t i = 0; i < segments.size(); ++i)
-        {
-            if (i > 0)
-                std::cout << " | ";
-
-            std::cout << segments[i];
-        }
-
-        std::cout << '\n';
-    }
-
-
-    // Print every row and cell in a table.
-    void printTable(const ParsedTable& table)
-    {
-        for (std::size_t r = 0; r < table.rows.size(); ++r)
-        {
-            std::cout << "\nRow " << r + 1 << ":\n";
-
-            for (std::size_t c = 0;
-                 c < table.rows[r].cells.size(); ++c)
-            {
-                const ParsedCell& cell = table.rows[r].cells[c];
-
-                std::cout
-                    << "  Cell " << c + 1
-                    << " [colspan=" << cell.colSpan
-                    << ", rowspan=" << cell.rowSpan << "]: "
-                    << cell.text << '\n';
-            }
+            for (const std::string& note : stats.notes)
+                std::cout << "  - " << note << '\n';
         }
     }
-
 
     std::string quotePath(const std::string& path)
     {
         std::string result = "\"";
 
-        for (std::size_t i = 0; i < path.length(); ++i)
+        for (char c : path)
         {
-            if (path[i] == '"')
+            if (c == '"')
                 result += '\\';
-
-            result += path[i];
+            result += c;
         }
 
-        result += "\"";
-
-        return result;
+        return result + "\"";
     }
 }
 
 
 // ============================================================
-// PUBLIC TIMETABLE FETCHER FUNCTIONS
+// PUBLIC FUNCTIONS
 // ============================================================
 
 namespace TimetableFetcher
 {
-    // Download the timetable HTML.
-    bool downloadTimetable(
-        const std::string& url,
-        const std::string& outputPath)
+    bool downloadTimetable(const std::string& url, const std::string& outputPath)
     {
         std::string command =
-            "curl -L --fail --silent --show-error " +
-            quotePath(url) +
-            " -o " +
-            quotePath(outputPath);
+            "curl -L --fail --silent --show-error " + quotePath(url) +
+            " -o " + quotePath(outputPath);
 
         std::cout << "Downloading timetable...\n";
 
-        int result = std::system(command.c_str());
-
-        if (result != 0)
+        if (std::system(command.c_str()) != 0)
         {
             std::cerr << "Timetable download failed.\n";
             return false;
@@ -1397,416 +1135,78 @@ namespace TimetableFetcher
             return false;
         }
 
-        std::cout << "Timetable downloaded successfully: "
-                  << outputPath << '\n';
-
+        std::cout << "Timetable downloaded successfully: " << outputPath << '\n';
         return true;
     }
 
-
-    // Inspect the first section's two tables.
-    bool inspectFirstSectionTables(const std::string& htmlPath)
+    bool generateFirstSectionSessions(const std::string& htmlPath,
+                                      std::vector<Session>& sessions)
     {
-        std::string html = readFile(htmlPath);
+        const std::string html = readFile(htmlPath);
 
         if (html.empty())
             return false;
 
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        std::cout << "\nTotal tables found: "
-                  << tables.size() << '\n';
-
-        if (tables.size() < 2)
-        {
-            std::cerr << "First section tables not found.\n";
-            return false;
-        }
-
-        std::cout << "\n========== FIRST TABLE: TIMETABLE ==========\n";
-        printTable(tables[0]);
-
-        std::cout << "\n========== SECOND TABLE: SUBJECT DETAILS ==========\n";
-        printTable(tables[1]);
-
-        std::cout << "\nInspection successful.\n";
-
-        return true;
-    }
-
-
-    // Extract and print cleaned timetable entries for CSE A.
-    bool inspectFirstSectionSlots(const std::string& htmlPath)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-            return false;
-
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        if (tables.empty() || tables[0].rows.size() < 2)
-        {
-            std::cerr << "First timetable table not found.\n";
-            return false;
-        }
-
-        const std::vector<std::pair<std::string, std::string>> timeSlots =
-        {
-            {"08:00", "08:55"},
-            {"09:00", "09:55"},
-            {"09:55", "10:50"},
-            {"11:10", "12:05"},
-            {"12:05", "13:00"},
-            {"13:00", "13:55"},
-            {"13:55", "14:50"},
-            {"15:10", "16:05"},
-            {"16:05", "17:00"},
-            {"17:00", "17:55"}
-        };
-
-        const ParsedTable& timetable = tables[0];
-
-        std::cout << "\n--- CSE A: Cleaned Timetable ---\n";
-
-        for (std::size_t rowIndex = 1;
-             rowIndex < timetable.rows.size();
-             ++rowIndex)
-        {
-            const ParsedRow& row = timetable.rows[rowIndex];
-
-            if (row.cells.empty())
-                continue;
-
-            std::string day = normalizeDay(row.cells[0].text);
-
-            int slotIndex = 0;
-
-            for (std::size_t cellIndex = 1;
-                 cellIndex < row.cells.size();
-                 ++cellIndex)
-            {
-                const ParsedCell& cell = row.cells[cellIndex];
-
-                int span = cell.colSpan;
-
-                if (span < 1)
-                    span = 1;
-
-                if (slotIndex >= static_cast<int>(timeSlots.size()))
-                    break;
-
-                int endSlot = slotIndex + span;
-
-                if (endSlot > static_cast<int>(timeSlots.size()))
-                    endSlot = static_cast<int>(timeSlots.size());
-
-                if (!cell.text.empty())
-                {
-                    printCleanedCell(
-                        day,
-                        timeSlots[slotIndex].first,
-                        timeSlots[endSlot - 1].second,
-                        cell.text
-                    );
-                }
-
-                slotIndex += span;
-            }
-        }
-
-        std::cout << "\nCleaning completed.\n";
-
-        return true;
-    }
-    bool inspectFirstSectionSubjects(const std::string& htmlPath)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-            return false;
-
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        if (tables.size() < 2)
-        {
-            std::cerr << "Subject reference table not found.\n";
-            return false;
-        }
-
-        const ParsedTable& subjectTable = tables[1];
-
-        std::cout << "\n========== CSE A SUBJECT REFERENCE ==========\n";
-
-        for (std::size_t i = 1; i < subjectTable.rows.size(); ++i)
-        {
-            const ParsedRow& row = subjectTable.rows[i];
-
-            // Skip headings such as Elective and Lab.
-            if (row.cells.size() < 3)
-                continue;
-
-            std::string code = cleanReferenceField(row.cells[0].text);
-            std::string subject = cleanReferenceField(row.cells[1].text);
-            std::string faculty = cleanReferenceField(row.cells[2].text);
-
-            if (code.empty())
-                continue;
-
-            std::cout << "\nSubject Code: " << code
-                    << "\nSubject Name: " << subject
-                    << "\nFaculty: ";
-
-            if (faculty.empty())
-                std::cout << "Not specified";
-            else
-                std::cout << faculty;
-
-            std::cout << "\n----------------------------------------\n";
-        }
-
-        std::cout << "\nSubject reference extraction completed.\n";
-
-        return true;
-    }
-
-    bool inspectFirstSectionLookup(const std::string& htmlPath)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-            return false;
-
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        if (tables.size() < 2)
-        {
-            std::cerr << "Timetable or subject reference table missing.\n";
-            return false;
-        }
-
-        const ParsedTable& timetable = tables[0];
-        const ParsedTable& subjectTable = tables[1];
-
-        std::unordered_map<std::string, SubjectReference> lookup =
-            buildSubjectLookup(subjectTable);
-
-        std::cout << "\nTotal subject references loaded: "
-                << lookup.size() << '\n';
-
-        const std::vector<std::pair<std::string, std::string>> timeSlots =
-        {
-            {"08:00", "08:55"},
-            {"09:00", "09:55"},
-            {"09:55", "10:50"},
-            {"11:10", "12:05"},
-            {"12:05", "13:00"},
-            {"13:00", "13:55"},
-            {"13:55", "14:50"},
-            {"15:10", "16:05"},
-            {"16:05", "17:00"},
-            {"17:00", "17:55"}
-        };
-
-        std::cout << "\n========== CSE A: TIMETABLE LOOKUP ==========\n";
-
-        for (std::size_t r = 1; r < timetable.rows.size(); ++r)
-        {
-            const ParsedRow& row = timetable.rows[r];
-
-            if (row.cells.empty())
-                continue;
-
-            std::string day = normalizeDay(row.cells[0].text);
-            int slotIndex = 0;
-
-            for (std::size_t c = 1; c < row.cells.size(); ++c)
-            {
-                const ParsedCell& cell = row.cells[c];
-
-                int span = cell.colSpan;
-
-                if (span < 1)
-                    span = 1;
-
-                if (slotIndex >= static_cast<int>(timeSlots.size()))
-                    break;
-
-                int endSlot = slotIndex + span;
-
-                if (endSlot > static_cast<int>(timeSlots.size()))
-                    endSlot = static_cast<int>(timeSlots.size());
-
-                if (!cell.text.empty() && !isNonAcademic(cell.text))
-                {
-                    std::vector<std::string> codes =
-                        extractSubjectCodes(cell.text);
-
-                    if (!codes.empty())
-                    {
-                        for (std::size_t k = 0; k < codes.size(); ++k)
-                        {
-                            std::cout << "\nDay: " << day
-                                    << "\nTime: "
-                                    << timeSlots[slotIndex].first
-                                    << " - "
-                                    << timeSlots[endSlot - 1].second
-                                    << "\nCode: " << codes[k];
-
-                            std::unordered_map<std::string,
-                                SubjectReference>::const_iterator found =
-                                lookup.find(codes[k]);
-
-                            if (found != lookup.end())
-                            {
-                                std::cout
-                                    << "\nSubject: "
-                                    << found->second.subjectName
-                                    << "\nFaculty: ";
-
-                                if (found->second.faculty.empty())
-                                    std::cout << "Not specified";
-                                else
-                                    std::cout << found->second.faculty;
-                            }
-                            else
-                            {
-                                std::cout
-                                    << "\nSubject: Reference not found"
-                                    << "\nFaculty: Not available";
-                            }
-
-                            std::cout << "\n------------------------------\n";
-                        }
-                    }
-                    else
-                    {
-                        std::cout << "\nDay: " << day
-                                << "\nTime: "
-                                << timeSlots[slotIndex].first
-                                << " - "
-                                << timeSlots[endSlot - 1].second
-                                << "\nUnmatched entry: "
-                                << cleanReferenceField(cell.text)
-                                << "\n------------------------------\n";
-                    }
-                }
-
-                slotIndex += span;
-            }
-        }
-
-        std::cout << "\nTimetable lookup completed.\n";
-
-        return true;
-    }
-
-    bool inspectFirstSectionRooms(const std::string& htmlPath)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-            return false;
-
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        if (tables.empty())
-            return false;
-
-        inspectCellRooms(tables[0]);
-
-        return true;
-    }
-
-    bool inspectFirstSectionParallelLabs(const std::string& htmlPath)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-        {
-            std::cout << "Could not read HTML file.\n";
-            return false;
-        }
-
-        std::vector<ParsedTable> tables = parseTables(html);
-
-        if (tables.empty())
-        {
-            std::cout << "No tables found.\n";
-            return false;
-        }
-
-        inspectParallelLabs(tables[0]);
-
-        return true;
-    }
-
-        bool generateFirstSectionSessions(
-        const std::string& htmlPath,
-        std::vector<Session>& sessions)
-    {
-        std::string html = readFile(htmlPath);
-
-        if (html.empty())
-            return false;
-
-        std::vector<ParsedTable> tables = parseTables(html);
+        const std::vector<ParsedTable> tables = parseTables(html);
 
         if (tables.size() < 2)
             return false;
+
+        std::vector<std::string> names = extractSectionNames(html);
+        BuildStats stats;
 
         sessions.clear();
-
-        generateSessionsFromTables(
-            tables[0],
-            tables[1],
-            sessions,
-            "CSE A"
-        );
+        generateSessionsFromTables(tables[0], tables[1], sessions,
+                                   names.empty() ? "A" : names[0], stats);
+        printStats(stats);
 
         return !sessions.empty();
     }
 
-
-    bool generateAllSections(
-        const std::string& htmlPath,
-        const std::vector<std::string>& sectionNames,
-        std::vector<Session>& sessions)
+    bool generateAllSections(const std::string& htmlPath,
+                             const std::vector<std::string>& sectionNames,
+                             std::vector<Session>& sessions)
     {
-        std::string html = readFile(htmlPath);
+        const std::string html = readFile(htmlPath);
 
         if (html.empty())
             return false;
 
-        std::vector<ParsedTable> tables = parseTables(html);
+        const std::vector<ParsedTable> tables = parseTables(html);
 
-        if (tables.size() != sectionNames.size() * 2)
+        if (tables.empty() || tables.size() % 2 != 0)
         {
-            std::cout << "Expected "
-                    << sectionNames.size() * 2
-                    << " tables, found "
-                    << tables.size() << '\n';
+            std::cout << "Unexpected number of tables: " << tables.size() << '\n';
+            return false;
+        }
 
+        std::vector<std::string> names = extractSectionNames(html);
+
+        if (names.size() * 2 != tables.size())
+        {
+            std::cout << "Could not read " << tables.size() / 2
+                      << " section headings (found " << names.size()
+                      << "); using the supplied section names.\n";
+            names = sectionNames;
+        }
+
+        if (names.size() * 2 != tables.size())
+        {
+            std::cout << "Expected " << names.size() * 2 << " tables, found "
+                      << tables.size() << '\n';
             return false;
         }
 
         sessions.clear();
+        BuildStats stats;
 
-        for (std::size_t i = 0; i < sectionNames.size(); i++)
-        {
-            std::size_t tableIndex = i * 2;
+        for (std::size_t i = 0; i < names.size(); ++i)
+            generateSessionsFromTables(tables[i * 2], tables[i * 2 + 1],
+                                       sessions, names[i], stats);
 
-            generateSessionsFromTables(
-                tables[tableIndex],
-                tables[tableIndex + 1],
-                sessions,
-                sectionNames[i]
-            );
-
-            std::cout << sectionNames[i] << " processed.\n";
-        }
+        std::cout << names.size() << " sections processed.\n";
+        printStats(stats);
 
         return !sessions.empty();
     }
-
 }

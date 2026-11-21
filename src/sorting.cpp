@@ -6,10 +6,13 @@
 static void merge(std::vector<Session>& sessions, int left, int mid, int right) 
 {
     std::vector<Session> temp;
+    temp.reserve(right - left + 1);
     int i = left, j = mid + 1;
 
     while (i <= mid && j <= right) {
-        if (sessions[i] < sessions[j]) temp.push_back(sessions[i++]);
+        // Take from the right half only if it is strictly smaller, so equal
+        // sessions keep their original order (stable merge sort).
+        if (!(sessions[j] < sessions[i])) temp.push_back(sessions[i++]);
         else temp.push_back(sessions[j++]);
     }
     while (i <= mid) temp.push_back(sessions[i++]);
