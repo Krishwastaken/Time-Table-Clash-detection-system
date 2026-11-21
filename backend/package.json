@@ -1,0 +1,15 @@
+{
+  "name": "university-timetable-admin-backend",
+  "version": "1.0.0",
+  "description": "Backend API and C++ integration engine service for University Timetable Management System",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node tests/api.test.js",
+    "provision": "node scripts/provision_admins.js",
+    "build:cpp": "bash scripts/build_cpp.sh"
+  },
+  "keywords": ["timetable", "clash-detection", "admin-portal", "university"],
+  "author": "Antigravity Engineering",
+  "license": "ISC"
+}
