@@ -1,0 +1,13 @@
+subject,faculty,room,section,day,startTime,endTime,studentCount
+Data Structures with C,Hon'ble President Sir/Mr. Upendra Aswal,LT-13,A,Monday,08:00,08:55,180
+Object Oriented Programming with C++,Dr. Amit Kumar,LT-1,A,Monday,08:30,09:30,160
+Logic Design and Computer Organization,Dr. Hemant Singh Pokhariya,LT-1,B,Monday,08:30,09:30,210
+Object Oriented Programming with C++,Dr. Amit Kumar,LT-2,C,Monday,09:00,10:00,90
+OOPS with C++ Lab,Dr. Amit Kumar,Lab-1,D,Monday,09:00,10:00,35
+Discrete Structures and Combinatorics,Dr. Anand Chauhan,CR-2,E,Monday,10:00,11:00,120
+Fundamentals of Cloud Computing and Bigdata,Ms. Sarishma,LT-1,F,Monday,10:00,11:00,190
+Data Structures Lab,Mr. Upendra Aswal,Digital Lab-1,A,Tuesday,09:00,10:00,45
+Logic Design and Computer Organization Lab,Dr. Niraj Kumar,Digital Lab-1,B,Tuesday,09:30,10:30,40
+Fundamentals of IoT,Dr. Prabhdeep Singh,CR-3,C,Tuesday,11:00,12:00,95
+Python Programming,Mr. Chitransh Bose,LT-5,D,Tuesday,11:00,12:00,110
+Introduction to Cryptography,Dr. Upma Jain,LT-2,E,Tuesday,11:00,12:00,85

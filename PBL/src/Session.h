@@ -1,0 +1,55 @@
+#ifndef SESSION_H
+#define SESSION_H
+
+#include <iostream>
+#include <string>
+
+class Session {
+private:
+    std::string subject;
+    std::string faculty;
+    std::string room;
+    std::string section;
+    std::string day;
+    std::string startTime;
+    std::string endTime;
+    int studentCount;
+
+public:
+    Session(
+        const std::string& subject,
+        const std::string& faculty,
+        const std::string& room,
+        const std::string& section,
+        const std::string& day,
+        const std::string& startTime,
+        const std::string& endTime,
+        int studentCount
+        
+    );
+
+    Session();
+
+    std::string getSubject() const;
+    std::string getFaculty() const;
+    std::string getRoom() const;
+    std::string getSection() const;
+    std::string getDay() const;
+    std::string getStartTime() const;
+    std::string getEndTime() const;
+    int getStudentCount() const;
+    int getRoomCapacity() const;
+
+    bool operator<(const Session& other) const;
+
+    void setRoom(const std::string& newRoom);
+    void setStartTime(const std::string& newStart);
+    void setEndTime(const std::string& newEnd);
+    void setDay(const std::string& newDay);
+    void setFaculty(const std::string& newFaculty);
+    void setStudentCount(int newCount);
+
+    friend std::ostream& operator<<(std::ostream& os, const Session& session);
+};
+
+#endif
