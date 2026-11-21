@@ -1,0 +1,22 @@
+{
+  "name": "university-timetable-management-system",
+  "version": "1.0.0",
+  "description": "University Timetable Management and Clash Detection System - Production Admin Portal & C++ Engine",
+  "scripts": {
+    "setup": "make -C PBL && npm run provision --prefix backend",
+    "start": "node backend/src/server.js",
+    "test": "node adminfrontend/tests/auth.test.js && npm test --prefix backend && make -C PBL test",
+    "build:cpp": "make -C PBL",
+    "provision": "npm run provision --prefix backend"
+  },
+  "keywords": [
+    "university",
+    "timetable",
+    "clash-detection",
+    "greedy-graph-coloring",
+    "admin-portal",
+    "cpp"
+  ],
+  "author": "University Timetable Engineering Team",
+  "license": "ISC"
+}

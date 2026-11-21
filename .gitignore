@@ -1,0 +1,28 @@
+# Operating System
+.DS_Store
+Thumbs.db
+
+# Dependencies
+node_modules/
+
+# SQLite Database Files
+database/timetable.sqlite
+database/timetable.sqlite-shm
+database/timetable.sqlite-wal
+
+# C++ Build Artifacts
+PBL/bin/*
+!PBL/bin/.gitkeep
+PBL/*.o
+PBL/src/*.o
+
+# Logs
+*.log
+
+# Raw User Upload Archives in root (normalized copies exist in data/)
+/saferoute (1).csv
+/saferoute (1).zip
+/GEU_Assessment_Results_2026-11-05.csv
+/admin_master.csv
+/faculty_master.csv
+/sessions.csv
