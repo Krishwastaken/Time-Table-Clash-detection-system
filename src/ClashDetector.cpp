@@ -47,14 +47,25 @@ string normalize(const string& value) {
 }
 
 // Determine room capacity using normalized room names.
-int roomCapacityFor(const Session& session) {
-    string room = normalize(session.getRoom());
+int roomCapacityFor(const Session& session)
+{
+    std::string room = normalize(session.getRoom());
+
+    // Skip laboratory capacity checks for now.
+    if (room.find("LAB") != std::string::npos)
+        return 0;
 
     if (room.rfind("CR", 0) == 0)
-        return 100;
+        return 80;
 
     if (room.rfind("LT", 0) == 0)
-        return 200;
+        return 160;
+
+    if (room.find("DIGITAL LAB") != std::string::npos)
+        return 0;
+
+    if (room.find("GEHU-AUDI") != std::string::npos)
+        return 500;
 
     return 0;
 }
@@ -103,19 +114,110 @@ bool overlaps(const Session& a, const Session& b) {
     int bStart = toMinutes(b.getStartTime());
     int bEnd = toMinutes(b.getEndTime());
 
+    //remove
+    if (a.getSubject().find("Data Structures Lab") != string::npos ||
+    b.getSubject().find("Data Structures Lab") != string::npos)
+    {
+        cout << "\n========== DEBUG ==========\n";
+
+        cout << "A: " << a.getSubject()
+            << " | " << a.getStartTime()
+            << "-" << a.getEndTime() << "\n";
+
+        cout << "B: " << b.getSubject()
+            << " | " << b.getStartTime()
+            << "-" << b.getEndTime() << "\n";
+
+        cout << "Minutes A: " << aStart << "-" << aEnd << "\n";
+        cout << "Minutes B: " << bStart << "-" << bEnd << "\n";
+
+        cout << "Overlap: "
+            << (aStart < bEnd && bStart < aEnd) << "\n";
+
+        cout << "===========================\n";
+    }
+    //remove
     return aStart < bEnd && bStart < aEnd;
 }
 
 // Exclude non-class activities by subject.
-bool isExcluded(const Session& session) {
+// Exclude non-class activities and optionally the President class.
+bool isExcluded(
+    const Session& session,
+    bool ignorePresidentClass
+) {
+    std::string subject = normalize(session.getSubject());
+
+    if (subject == "LUNCH" ||
+        subject == "LIB" ||
+        subject.find("TRAINING") != std::string::npos ||
+        subject.find("EXTRA-CURRICULAR ACTIVITIES")
+            != std::string::npos) {
+        return true;
+    }
+
+    // Only enabled for the 3rd-semester dataset.
+    if (ignorePresidentClass) {
+        std::string faculty = normalize(session.getFaculty());
+
+        if (faculty.find("PRESIDENT") != std::string::npos)
+            return true;
+    }
+
+    return false;
+}
+
+// Extract group information such as G1 or G2 from the subject.
+string extractGroup(const Session& session) {
+
     string subject = normalize(session.getSubject());
 
-    return subject == "LUNCH" ||
-           subject == "LIB" ||
-           subject == "SWAYAM" ||
-           subject.find("TRAINING") != string::npos ||
-           subject.find("EXTRA-CURRICULAR ACTIVITIES")
-               != string::npos;
+    size_t pos = subject.find("(G");
+
+    if (pos == string::npos)
+        return "";
+
+    size_t end = subject.find(')', pos);
+
+    if (end == string::npos)
+        return "";
+
+    string group = subject.substr(pos + 1, end - pos - 1);
+
+    // Validate that the group contains G followed by digits.
+    if (group.size() < 2 || group[0] != 'G')
+        return "";
+
+    for (size_t i = 1; i < group.size(); i++) {
+        if (!isdigit(static_cast<unsigned char>(group[i])))
+            return "";
+    }
+
+    return group;
+}
+
+bool isCombinedClass(const Session& a, const Session& b)
+{
+    std::string subjectA = normalize(a.getSubject());
+    std::string subjectB = normalize(b.getSubject());
+
+    std::string roomA = normalize(a.getRoom());
+    std::string roomB = normalize(b.getRoom());
+
+    // Laboratories must never be treated as combined lectures.
+    if (subjectA.find("LAB") != std::string::npos ||
+        subjectB.find("LAB") != std::string::npos ||
+        roomA.find("LAB") != std::string::npos ||
+        roomB.find("LAB") != std::string::npos)
+    {
+        return false;
+    }
+
+    return normalize(a.getDay()) == normalize(b.getDay()) &&
+           toMinutes(a.getStartTime()) == toMinutes(b.getStartTime()) &&
+           toMinutes(a.getEndTime()) == toMinutes(b.getEndTime()) &&
+           roomA == roomB &&
+           subjectA == subjectB;
 }
 
 // Create a unique, delimiter-safe session signature.
@@ -203,7 +305,28 @@ void checkHashedGroups(
 
                 if (!overlaps(sessions[i], sessions[j]))
                     continue;
+                
+                // Different groups of the same section can attend
+                // separate classes simultaneously.
+                if (type == ClashType::Section) {
 
+                    string groupA = extractGroup(sessions[i]);
+                    string groupB = extractGroup(sessions[j]);
+
+                    if (!groupA.empty() &&
+                        !groupB.empty() &&
+                        groupA != groupB) {
+                        continue;
+                    }
+                }
+
+                // Ignore combined lectures for faculty and room clashes.
+                if ((type == ClashType::Faculty ||
+                    type == ClashType::Room) &&
+                    isCombinedClass(sessions[i], sessions[j]))
+                {
+                    continue;
+                }
                 addClash(
                     clashes,
                     type,
@@ -219,7 +342,8 @@ void checkHashedGroups(
 } // namespace
 
 vector<Clash> ClashDetector::detectClashes(
-    const vector<Session>& sessions
+    const vector<Session>& sessions,
+    bool ignorePresidentClass
 ) {
     vector<Clash> clashes;
 
@@ -235,7 +359,7 @@ vector<Clash> ClashDetector::detectClashes(
     for (size_t i = 0; i < sessions.size(); ++i) {
         const Session& session = sessions[i];
 
-        if (isExcluded(session))
+        if (isExcluded(session, ignorePresidentClass))
             continue;
 
         if (!validInterval(session))
@@ -269,11 +393,15 @@ vector<Clash> ClashDetector::detectClashes(
         if (!faculty.empty())
             facultyGroups[faculty].push_back(i);
 
-        // 3. Group by room.
+        // 3. Group by physical room.
         string room = normalize(session.getRoom());
 
-        if (!room.empty())
+        if (!room.empty() &&
+            room != "UNKNOWN" &&
+            room != "ONLINE")
+        {
             roomGroups[room].push_back(i);
+        }
 
         // 4. Group by section.
         string section = normalize(session.getSection());

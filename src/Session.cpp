@@ -1,4 +1,6 @@
 #include "Session.h"
+#include <algorithm>
+#include <cctype>
 
 Session::Session(
     const std::string& subject,
@@ -66,12 +68,49 @@ int Session::getStudentCount() const {
     return studentCount;
 }
 
-int Session::getRoomCapacity() const {
-    if (room.rfind("CR", 0) == 0)
-        return 100;
+int Session::getRoomCapacity() const
+{
+    std::string normalizedRoom = room;
 
-    if (room.rfind("LT", 0) == 0)
-        return 200;
+    std::transform(
+        normalizedRoom.begin(),
+        normalizedRoom.end(),
+        normalizedRoom.begin(),
+        [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        }
+    );
+
+    // Classrooms
+    if (normalizedRoom.find("cr") == 0)
+        return 80;
+
+    // Lecture theatres
+    if (normalizedRoom.find("lt") == 0)
+        return 160;
+
+    // Digital laboratories
+    if (normalizedRoom.find("digital lab-1") != std::string::npos ||
+        normalizedRoom.find("digital lab-2") != std::string::npos)
+        return 80;
+
+    // Other laboratories
+    if (normalizedRoom.find("lab-1") != std::string::npos ||
+    normalizedRoom.find("lab-7") != std::string::npos)
+    {
+        return 40;
+    }
+
+    if (normalizedRoom.find("lab-2") != std::string::npos ||
+    normalizedRoom.find("lab-5") != std::string::npos ||
+    normalizedRoom.find("lab-6") != std::string::npos)
+    {
+        return 80;
+    }
+    
+    // Auditorium
+    if (normalizedRoom.find("gehu-audi") != std::string::npos)
+        return 500;
 
     return 0;
 }

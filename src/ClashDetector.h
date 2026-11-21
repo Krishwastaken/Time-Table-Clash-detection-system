@@ -30,8 +30,9 @@ class ClashDetector {
 public:
     // Returns all detected clashes. Does not modify the input vector.
     static std::vector<Clash> detectClashes(
-        const std::vector<Session>& sessions
-    );
+    const std::vector<Session>& sessions,
+    bool ignorePresidentClass = false
+    );  
 
     // Prints a human-readable clash report.
     static void printClashes(const std::vector<Clash>& clashes,
