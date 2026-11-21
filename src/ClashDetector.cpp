@@ -114,29 +114,6 @@ bool overlaps(const Session& a, const Session& b) {
     int bStart = toMinutes(b.getStartTime());
     int bEnd = toMinutes(b.getEndTime());
 
-    //remove
-    if (a.getSubject().find("Data Structures Lab") != string::npos ||
-    b.getSubject().find("Data Structures Lab") != string::npos)
-    {
-        cout << "\n========== DEBUG ==========\n";
-
-        cout << "A: " << a.getSubject()
-            << " | " << a.getStartTime()
-            << "-" << a.getEndTime() << "\n";
-
-        cout << "B: " << b.getSubject()
-            << " | " << b.getStartTime()
-            << "-" << b.getEndTime() << "\n";
-
-        cout << "Minutes A: " << aStart << "-" << aEnd << "\n";
-        cout << "Minutes B: " << bStart << "-" << bEnd << "\n";
-
-        cout << "Overlap: "
-            << (aStart < bEnd && bStart < aEnd) << "\n";
-
-        cout << "===========================\n";
-    }
-    //remove
     return aStart < bEnd && bStart < aEnd;
 }
 
