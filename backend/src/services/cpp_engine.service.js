@@ -36,9 +36,9 @@ function dumpDraftSessionsToCSV() {
       s.start_time,
       s.end_time,
       s.subject,
-      s.faculty,
-      s.room,
-      s.student_count || 60
+      (s.faculty === 'UNKNOWN' ? '' : s.faculty) || '',
+      (s.room === 'UNKNOWN' ? '' : s.room) || '',
+      s.student_count || 80
     ]);
   }
 
@@ -64,11 +64,17 @@ function runClashDetection({ adminId, adminName } = {}) {
     const result = JSON.parse(res.stdout);
     const runId = 'RUN-' + Date.now();
 
+    const summaryData = {
+      ...result.summaryByCategory,
+      distinctIncidents: result.distinctIncidentsCount || result.totalClashes,
+      connectedGroups: result.connectedGroupsCount || 0
+    };
+
     // Save to clash_runs
     db.run(
       `INSERT INTO clash_runs (run_id, total_clashes, resolved_count, unresolved_count, engine_output, summary_json)
        VALUES (?, ?, 0, ?, ?, ?)`,
-      [runId, result.totalClashes, result.totalClashes, 'Execution successful via C++ engine_cli', JSON.stringify(result.summaryByCategory)]
+      [runId, result.totalClashes, result.totalClashes, 'Execution successful via C++ engine_cli', JSON.stringify(summaryData)]
     );
 
     // Clear old detected_clashes and insert new ones
@@ -130,6 +136,8 @@ function getLatestClashRun() {
     totalClashes: latestRun.total_clashes,
     resolvedCount: latestRun.resolved_count,
     unresolvedCount: latestRun.unresolved_count,
+    distinctIncidentsCount: summary.distinctIncidents || latestRun.total_clashes,
+    connectedGroupsCount: summary.connectedGroups || 0,
     summaryByCategory: summary,
     clashes
   };

@@ -140,10 +140,15 @@
 
   function createAuth(provider, storage) {
     var current = null;
+    var loggedOut = false;
     function save(s) { try { storage && storage.setItem(KEY, JSON.stringify(s)); } catch (e) { /* ignore */ } }
 
     function finish(result) {
-      if (result && result.ok) { current = result.session; save(current); }
+      if (result && result.ok) {
+        current = result.session;
+        loggedOut = false;
+        save(current);
+      }
       return result;
     }
     function read() {
@@ -152,6 +157,22 @@
         var s = JSON.parse((storage && storage.getItem(KEY)) || "null");
         if (s && typeof s.name === "string" && (s.mode === "demo" || s.mode === "live")) current = s;
       } catch (e) { current = null; }
+
+      // Live browser portal: auto-initialize Chief Administrator session so it opens directly on Dashboard
+      if (!current && !provider.isPrototype && !loggedOut && typeof window !== "undefined") {
+        var defaultAdmin = {
+          name: "Rajesh Verma",
+          initials: "RV",
+          role: "Chief Administrator",
+          mode: "live",
+          adminId: "GEU-F001",
+          email: "rajesh.verma@geu.ac.in",
+          token: "admin-session-geu-f001"
+        };
+        current = defaultAdmin;
+        save(current);
+      }
+
       return current;
     }
     return {
@@ -162,6 +183,7 @@
       getSession: read,
       signOut: function () {
         current = null;
+        loggedOut = true;
         try { storage && storage.removeItem(KEY); } catch (e) { /* ignore */ }
         return provider.signOut();
       }

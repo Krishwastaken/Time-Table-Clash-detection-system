@@ -133,8 +133,63 @@ function seedAcademicStructure() {
 }
 
 function seedSessions() {
-  const count = db.get('SELECT COUNT(*) as c FROM timetable_sessions');
-  if (count && count.c > 0) return;
+  const existing = db.get('SELECT COUNT(*) as c FROM timetable_sessions WHERE is_draft = 1');
+  const has699Clashes = db.get("SELECT COUNT(*) as c FROM clash_runs WHERE total_clashes = 699")?.c > 0;
+
+  // Re-seed if no sessions or if currently holding the legacy 714 prototype draft
+  if (existing && existing.c > 0 && !has699Clashes && existing.c !== 714) return;
+
+  // Clear legacy prototype draft and old bogus 699 runs
+  db.run('DELETE FROM timetable_sessions WHERE is_draft = 1');
+  db.run('DELETE FROM detected_clashes');
+  db.run("DELETE FROM clash_runs WHERE total_clashes = 699");
+
+  const htmlPath = path.join(config.DATA_DIR, '3sem.html');
+  const os = require('node:os');
+  const { spawnSync } = require('node:child_process');
+
+  if (fs.existsSync(htmlPath)) {
+    const tmpJson = path.join(os.tmpdir(), `seed_3sem_${Date.now()}.json`);
+    try {
+      const res = spawnSync(config.ENGINE_BIN, ['export', htmlPath, tmpJson], { encoding: 'utf8' });
+      if (res.status === 0 && fs.existsSync(tmpJson)) {
+        const exported = JSON.parse(fs.readFileSync(tmpJson, 'utf8'));
+        const sessions = (exported && exported.original && exported.original.sessions) || [];
+
+        const stmt = db.db.prepare(
+          `INSERT INTO timetable_sessions (id, version_id, section, day, start_time, end_time, subject, faculty, room, student_count, is_draft)
+           VALUES (?, 'DRAFT-CURRENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        );
+
+        let inserted = 0;
+        for (const s of sessions) {
+          stmt.run(
+            `SESS-3SEM-${s.id}`,
+            s.section,
+            s.day,
+            s.start,
+            s.end,
+            s.subject,
+            s.faculty || '',
+            s.room || '',
+            s.students || 80
+          );
+          inserted++;
+        }
+
+        db.run(
+          `INSERT OR REPLACE INTO timetable_versions (version_id, version_number, status, notes, session_count)
+           VALUES ('DRAFT-CURRENT', 'v1.0-official-3sem', 'DRAFT', 'Official university timetable ingested from 3sem.html', ?)`,
+          [inserted]
+        );
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to seed from 3sem.html, falling back to sessions.csv:', err);
+    } finally {
+      try { if (fs.existsSync(tmpJson)) fs.unlinkSync(tmpJson); } catch (e) {}
+    }
+  }
 
   if (!fs.existsSync(config.SESSIONS_CSV)) return;
 
@@ -175,7 +230,7 @@ function seedSessions() {
     db.run(
       `INSERT OR IGNORE INTO timetable_sessions (id, version_id, section, day, start_time, end_time, subject, faculty, room, student_count, is_draft)
        VALUES (?, 'DRAFT-CURRENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      [sessId, sec, day, start, end, sub, fac || 'UNKNOWN', room || 'UNKNOWN', sCount]
+      [sessId, sec, day, start, end, sub, fac || '', room || '', sCount]
     );
     inserted++;
   }

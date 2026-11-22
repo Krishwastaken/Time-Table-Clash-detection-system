@@ -46,6 +46,9 @@
     var session = A.getSession();
     if (!session) { showLogin(); return; }
     showPortal(session);
+    if (!location.hash || location.hash === "#" || location.hash === "#/") {
+      history.replaceState(null, "", "#/dashboard");
+    }
     var id = (location.hash || "").replace(/^#\/?/, "").split("/")[0] || "dashboard";
     var m = M.filter(function (x) { return x.id === id; })[0];
     if (!m) { history.replaceState(null, "", "#/dashboard"); m = M[0]; }

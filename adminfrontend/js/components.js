@@ -885,6 +885,11 @@
       latestClashReport = data;
       var sum = data.summaryByCategory || {};
 
+      var incEl = $("#kpi-incidents-clashes", container);
+      if (incEl) {
+        incEl.textContent = data.distinctIncidentsCount || sum.distinctIncidents || data.totalClashes || 0;
+      }
+
       $("#kpi-total-clashes", container).textContent = data.totalClashes || 0;
       $("#kpi-fac-clashes", container).textContent = sum["Faculty"] || 0;
       $("#kpi-room-clashes", container).textContent = sum["Room"] || 0;
