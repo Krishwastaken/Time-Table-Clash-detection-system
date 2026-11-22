@@ -10,14 +10,27 @@ database/timetable.sqlite
 database/timetable.sqlite-shm
 database/timetable.sqlite-wal
 
-# C++ Build Artifacts
+# C++ Build Artifacts & Objects
 PBL/bin/*
 !PBL/bin/.gitkeep
 PBL/*.o
 PBL/src/*.o
+*.o
+*.obj
+*.gch
+*.pdb
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
+timetable_app
 
-# Logs
+# Logs & Temp
 *.log
+*.tmp
+*.bak
+*.swp
 
 # Raw User Upload Archives in root (normalized copies exist in data/)
 /saferoute (1).csv
