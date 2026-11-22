@@ -382,12 +382,13 @@
       I.svg("alert", 20) +
       "<div><strong>Native C++ Engine Integration.</strong> Clicking 'Run Clash Detection' invokes the compiled C++ executable (<code>PBL/bin/engine_cli</code>), executes interval sweep-line analysis, detects room capacity shortfalls, and prepares automated graph-coloring resolutions.</div>" +
       "</div>" +
-      '<div class="kpi-grid" style="grid-template-columns: repeat(5, 1fr); margin-bottom:20px;">' +
+      '<div class="kpi-grid" style="grid-template-columns: repeat(6, 1fr); margin-bottom:20px;">' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Total Clashes</div><div class="kpi-value" id="kpi-total-clashes" style="color:#dc2626;">--</div><div class="kpi-desc">Across all draft sessions</div></div></article>' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Faculty Clashes</div><div class="kpi-value" id="kpi-fac-clashes">--</div><div class="kpi-desc">Overlapping schedules</div></div></article>' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Room Clashes</div><div class="kpi-value" id="kpi-room-clashes">--</div><div class="kpi-desc">Double booked venues</div></div></article>' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Section Clashes</div><div class="kpi-value" id="kpi-sec-clashes">--</div><div class="kpi-desc">Overlapping classes</div></div></article>' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Capacity Clashes</div><div class="kpi-value" id="kpi-cap-clashes">--</div><div class="kpi-desc">Cohort exceeds room limit</div></div></article>' +
+      '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Conflict Rate</div><div class="kpi-value" id="kpi-density-clashes" style="color:#7c3aed;">--</div><div class="kpi-desc">Session conflict density</div></div></article>' +
       "</div>" +
       '<div class="module-toolbar">' +
       '<div class="search-filters">' +

@@ -41,6 +41,28 @@ function handleStatsRoutes(req, res, url) {
       'Duplicate session': latestClash?.summaryByCategory?.['Duplicate session'] ?? null
     };
 
+    // Calculate timetable conflict density & peak time slot distributions
+    let conflictDensity = 0;
+    if (sessionCount > 0 && latestClash && latestClash.totalClashes > 0) {
+      conflictDensity = Math.min(100, Math.round((latestClash.totalClashes / sessionCount) * 100 * 10) / 10);
+    }
+
+    const dayDistribution = {
+      Monday: 0,
+      Tuesday: 0,
+      Wednesday: 0,
+      Thursday: 0,
+      Friday: 0,
+      Saturday: 0
+    };
+
+    const draftSessions = db.all('SELECT day, start_time FROM timetable_sessions WHERE is_draft = 1');
+    for (const s of draftSessions) {
+      if (dayDistribution[s.day] !== undefined) {
+        dayDistribution[s.day]++;
+      }
+    }
+
     return sendJSON(res, {
       ok: true,
       metrics: {
@@ -49,7 +71,8 @@ function handleStatsRoutes(req, res, url) {
         sections: sectionCount,
         sessions: sessionCount,
         pending: publishedVersion ? (sessionCount !== publishedVersion.session_count ? 'Yes' : 'None') : sessionCount,
-        clashes: latestClash ? latestClash.totalClashes : null
+        clashes: latestClash ? latestClash.totalClashes : null,
+        conflictDensity
       },
       timetableStatus: {
         state: publishedVersion ? 'Published (with draft modifications)' : 'Draft (Unpublished)',
@@ -61,7 +84,9 @@ function handleStatsRoutes(req, res, url) {
         total: latestClash ? latestClash.totalClashes : null,
         resolved: latestClash ? latestClash.resolvedCount : null,
         unresolved: latestClash ? latestClash.unresolvedCount : null,
-        byCategory: categories
+        conflictDensity,
+        byCategory: categories,
+        dayDistribution
       },
       activityFeed
     });

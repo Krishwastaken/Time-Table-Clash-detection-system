@@ -891,6 +891,14 @@
       $("#kpi-sec-clashes", container).textContent = sum["Section"] || 0;
       $("#kpi-cap-clashes", container).textContent = sum["Room capacity"] || 0;
 
+      var denEl = $("#kpi-density-clashes", container);
+      if (denEl) {
+        var tot = data.totalClashes || 0;
+        var sCount = (D.getMetric && D.getMetric("sessions")) || 0;
+        var den = data.conflictDensity != null ? data.conflictDensity + "%" : (sCount > 0 ? Math.round((tot / sCount) * 100) + "%" : "--");
+        denEl.textContent = den;
+      }
+
       renderClashesList();
     }
 
