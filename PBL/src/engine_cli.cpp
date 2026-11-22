@@ -224,6 +224,12 @@ int main(int argc, char* argv[]) {
         if (targetClashIdx >= 0) {
             auto p = Resolver::proposeSingleClash(targetClashIdx, clashes, sessions);
             if (jsonOutput) {
+                int propCap = p.proposedCapacity;
+                if (propCap <= 0 && !p.proposedRoom.empty() && p.proposedRoom != "[REMOVED]") {
+                    propCap = Session("", "", p.proposedRoom, "", "", "", "", 0).getRoomCapacity();
+                }
+                if (propCap <= 0) propCap = p.originalCapacity;
+
                 std::cout << "{\n"
                           << "  \"clashIndex\": " << p.clashIndex << ",\n"
                           << "  \"clashId\": \"" << p.clashId << "\",\n"
@@ -231,8 +237,28 @@ int main(int argc, char* argv[]) {
                           << "  \"action\": \"" << p.action << "\",\n"
                           << "  \"explanation\": \"" << jsonEscape(p.explanation) << "\",\n"
                           << "  \"targetSessionIndex\": " << p.targetSessionIndex << ",\n"
-                          << "  \"original\": {\"room\":\"" << jsonEscape(p.originalRoom) << "\",\"day\":\"" << jsonEscape(p.originalDay) << "\",\"startTime\":\"" << jsonEscape(p.originalStartTime) << "\",\"endTime\":\"" << jsonEscape(p.originalEndTime) << "\"},\n"
-                          << "  \"proposed\": {\"room\":\"" << jsonEscape(p.proposedRoom) << "\",\"day\":\"" << jsonEscape(p.proposedDay) << "\",\"startTime\":\"" << jsonEscape(p.proposedStartTime) << "\",\"endTime\":\"" << jsonEscape(p.proposedEndTime) << "\"},\n"
+                          << "  \"original\": {\n"
+                          << "    \"subject\": \"" << jsonEscape(p.originalSubject) << "\",\n"
+                          << "    \"section\": \"" << jsonEscape(p.originalSection) << "\",\n"
+                          << "    \"faculty\": \"" << jsonEscape(p.originalFaculty) << "\",\n"
+                          << "    \"room\": \"" << jsonEscape(p.originalRoom) << "\",\n"
+                          << "    \"day\": \"" << jsonEscape(p.originalDay) << "\",\n"
+                          << "    \"startTime\": \"" << jsonEscape(p.originalStartTime) << "\",\n"
+                          << "    \"endTime\": \"" << jsonEscape(p.originalEndTime) << "\",\n"
+                          << "    \"roomCapacity\": " << p.originalCapacity << ",\n"
+                          << "    \"studentCount\": " << p.originalStudents << "\n"
+                          << "  },\n"
+                          << "  \"proposed\": {\n"
+                          << "    \"subject\": \"" << jsonEscape(p.originalSubject) << "\",\n"
+                          << "    \"section\": \"" << jsonEscape(p.originalSection) << "\",\n"
+                          << "    \"faculty\": \"" << jsonEscape(p.originalFaculty) << "\",\n"
+                          << "    \"room\": \"" << jsonEscape(p.proposedRoom) << "\",\n"
+                          << "    \"day\": \"" << jsonEscape(p.proposedDay) << "\",\n"
+                          << "    \"startTime\": \"" << jsonEscape(p.proposedStartTime) << "\",\n"
+                          << "    \"endTime\": \"" << jsonEscape(p.proposedEndTime) << "\",\n"
+                          << "    \"roomCapacity\": " << propCap << ",\n"
+                          << "    \"studentCount\": " << p.originalStudents << "\n"
+                          << "  },\n"
                           << "  \"clashesBefore\": " << p.clashesBefore << ",\n"
                           << "  \"clashesAfter\": " << p.clashesAfter << "\n"
                           << "}\n";

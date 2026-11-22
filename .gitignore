@@ -31,6 +31,7 @@ timetable_app
 *.tmp
 *.bak
 *.swp
+PBL/data/test_*.csv
 
 # Raw User Upload Archives in root (normalized copies exist in data/)
 /saferoute (1).csv

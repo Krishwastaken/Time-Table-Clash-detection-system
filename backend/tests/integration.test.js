@@ -172,6 +172,39 @@ async function runIntegrationSuite() {
     fail('Conflict export endpoints', e);
   }
 
+  // 6. Direct Resolved Timetable CSV Download
+  try {
+    const resRes1 = await invokeApi('GET', '/api/timetable/export?resolved=1');
+    assert.strictEqual(resRes1.status, 200);
+    assert(resRes1.headers['content-type'].includes('text/csv'));
+    assert(resRes1.headers['content-disposition'].includes('resolved_timetable.csv'));
+    assert(typeof resRes1.body === 'string' && resRes1.body.startsWith('Section,Day,Start_Time'));
+
+    const resRes2 = await invokeApi('GET', '/api/clash/resolved-timetable');
+    assert.strictEqual(resRes2.status, 200);
+    assert(resRes2.headers['content-type'].includes('text/csv'));
+    assert(resRes2.headers['content-disposition'].includes('resolved_timetable.csv'));
+    pass('Direct downloadable resolved timetable CSV endpoints (/api/timetable/export?resolved=1 and /api/clash/resolved-timetable)');
+  } catch (e) {
+    fail('Direct downloadable resolved timetable CSV endpoints', e);
+  }
+
+  // 7. Single Clash Proposal Full Metadata & Apply Resolution
+  try {
+    const propRes = await invokeApi('POST', '/api/clash/resolve', { clashIndex: 0 });
+    assert.strictEqual(propRes.status, 200);
+    assert.strictEqual(propRes.body.ok, true);
+    const p = propRes.body.proposal;
+    assert(p.original.subject, 'Original subject must not be empty');
+    assert(p.original.section, 'Original section must not be empty');
+    assert(typeof p.original.roomCapacity === 'number', 'Original roomCapacity must be a number');
+    assert(p.proposed.subject, 'Proposed subject must not be empty');
+    assert(typeof p.proposed.roomCapacity === 'number', 'Proposed roomCapacity must be a number');
+    pass('Single clash resolver emits complete subject, section, faculty and capacity metadata');
+  } catch (e) {
+    fail('Single clash resolver metadata', e);
+  }
+
   console.log('\n========================================================');
   console.log(`TEST SUMMARY: ${passed}/${passed + failed} passed (${failed} failed)`);
   console.log('========================================================\n');

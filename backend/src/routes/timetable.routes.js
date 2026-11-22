@@ -8,6 +8,7 @@ const config = require('../config');
 const { requireAuth, sendJSON, sendError } = require('../middleware');
 const auditService = require('../services/audit.service');
 const { parseCSV, normalizeHeader, toCSVString } = require('../utils/csv_parser');
+const { exportResolvedTimetableCSV } = require('../services/cpp_engine.service');
 
 function handleTimetableRoutes(req, res, url, body) {
   // 1. GET /api/timetable/sessions
@@ -361,8 +362,19 @@ function handleTimetableRoutes(req, res, url, body) {
     });
   }
 
-  // 6. GET /api/timetable/export: Export current draft
+  // 6. GET /api/timetable/export: Export current draft or direct resolved timetable
   if (url.pathname === '/api/timetable/export' && req.method === 'GET') {
+    const isResolved = url.searchParams.get('resolved') === '1' || url.searchParams.get('resolved') === 'true';
+
+    if (isResolved) {
+      const csvData = exportResolvedTimetableCSV();
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="resolved_timetable.csv"');
+      res.writeHead(200);
+      res.end(csvData);
+      return true;
+    }
+
     const sessions = db.all(
       'SELECT section, day, start_time, end_time, subject, faculty, room, student_count FROM timetable_sessions WHERE is_draft = 1 ORDER BY day, start_time, section'
     );

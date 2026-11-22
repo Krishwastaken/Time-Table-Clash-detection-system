@@ -163,9 +163,6 @@
 
     return (
       pageHeader([{ label: "Admin Portal" }, { label: "Dashboard" }], "Dashboard", "Central administrative command center.") +
-      '<div class="banner" role="note" style="border-left-color: #2563eb; background: #eff6ff;">' +
-      I.svg("info", 18) +
-      "<p><strong>Live Integrated System.</strong> Connected to backend REST API, SQLite database, and the native C++ clash detection and resolution engine.</p></div>" +
       '<section aria-label="Overview" class="kpi-grid">' +
       kpis +
       "</section>" +
@@ -371,17 +368,15 @@
         [{ label: "Admin Portal", href: "#/dashboard" }, { label: "Clash Detection" }],
         "Clash Detection & Resolution Engine",
         "Direct integration with the university C++ detection engine and conflict resolution resolver.",
-        '<div style="display:flex; gap:10px;">' +
+        '<div style="display:flex; gap:10px; flex-wrap:wrap;">' +
+        '<a href="' + API.getResolvedTimetableExportUrl() + '" class="btn btn-secondary" target="_blank" download="resolved_timetable.csv" style="background:#16a34a; color:#fff; border-color:#15803d;" title="Directly download conflict-resolved timetable CSV">' +
+        I.svg("download", 16) + ' DOWNLOAD RESOLVED TIMETABLE</a>' +
         '<button type="button" class="btn btn-secondary" id="btn-batch-resolve" style="background:#2563eb; color:#fff; border-color:#1d4ed8;">' +
         I.svg("check", 16) + ' AUTO-RESOLVE ALL</button>' +
         '<button type="button" class="btn btn-primary" id="btn-exec-clash-detection" style="background:#dc2626; border-color:#b91c1c;">' +
         I.svg("play", 16) + ' RUN CLASH DETECTION</button>' +
         '</div>'
       ) +
-      '<div class="banner" style="background:#fef2f2; border-left-color:#ef4444;">' +
-      I.svg("alert", 20) +
-      "<div><strong>Native C++ Engine Integration.</strong> Clicking 'Run Clash Detection' invokes the compiled C++ executable (<code>PBL/bin/engine_cli</code>), executes interval sweep-line analysis, detects room capacity shortfalls, and prepares automated graph-coloring resolutions.</div>" +
-      "</div>" +
       '<div class="kpi-grid" style="grid-template-columns: repeat(7, 1fr); margin-bottom:20px;">' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Exact Incidents</div><div class="kpi-value" id="kpi-incidents-clashes" style="color:#0284c7;">--</div><div class="kpi-desc">Consolidated conflicts</div></div></article>' +
       '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Total Clashes</div><div class="kpi-value" id="kpi-total-clashes" style="color:#dc2626;">--</div><div class="kpi-desc">Across all sessions</div></div></article>' +
@@ -401,7 +396,8 @@
       '<button type="button" class="btn btn-secondary btn-sm clash-filter-btn" data-type="Duplicate session">Duplicates</button>' +
       "</div>" +
       '<div style="display:flex; gap:8px; align-items:center;">' +
-      '<a href="' + API.getClashesExportUrl("csv") + '" class="btn btn-secondary btn-sm" target="_blank" download="timetable_conflicts.csv">' + I.svg("download", 14) + ' Export CSV</a>' +
+      '<a href="' + API.getResolvedTimetableExportUrl() + '" class="btn btn-secondary btn-sm" target="_blank" download="resolved_timetable.csv" style="color:#166534; background:#f0fdf4; border-color:#bbf7d0;">' + I.svg("download", 14) + ' Download Resolved CSV</a>' +
+      '<a href="' + API.getClashesExportUrl("csv") + '" class="btn btn-secondary btn-sm" target="_blank" download="timetable_conflicts.csv">' + I.svg("download", 14) + ' Conflicts CSV</a>' +
       '<a href="' + API.getClashesExportUrl("md") + '" class="btn btn-secondary btn-sm" target="_blank" download="timetable_conflicts.md">' + I.svg("download", 14) + ' Markdown</a>' +
       '<div id="engine-status-badge" class="badge badge-success">Engine Ready</div>' +
       "</div>" +

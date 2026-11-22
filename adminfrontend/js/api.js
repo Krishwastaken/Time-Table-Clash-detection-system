@@ -146,6 +146,9 @@
     getTimetableExportUrl: function () {
       return (BASE_URL || "") + "/api/timetable/export";
     },
+    getResolvedTimetableExportUrl: function () {
+      return (BASE_URL || "") + "/api/timetable/export?resolved=1";
+    },
 
     // Clash Detection & Resolver (Real C++ Engine)
     runClashDetection: function () {

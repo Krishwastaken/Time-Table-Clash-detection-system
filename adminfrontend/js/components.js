@@ -1003,6 +1003,9 @@
         var orig = p.original || {};
         var prop = p.proposed || {};
 
+        var origCap = (orig.roomCapacity != null && orig.roomCapacity > 0) ? ' (Cap: ' + orig.roomCapacity + ')' : '';
+        var propCap = (prop.roomCapacity != null && prop.roomCapacity > 0) ? ' (Cap: ' + prop.roomCapacity + ')' : '';
+
         var isRoomChanged = orig.room !== prop.room;
         var isTimeChanged = orig.startTime !== prop.startTime || orig.day !== prop.day;
 
@@ -1012,54 +1015,69 @@
           '<h4>Proposed Action: <span class="badge badge-info">' + esc(p.action) + '</span></h4>' +
           '<span class="badge ' + (p.feasible ? 'badge-success' : 'badge-danger') + '">' + (p.feasible ? 'FEASIBLE SOLUTION' : 'INFEASIBLE') + '</span>' +
           '</div>' +
-          '<div class="clash-desc" style="background:#f0fdf4; border-color:#bbf7d0; color:#166534; margin-top:8px;">' +
+          '<div class="clash-desc" style="background:' + (p.feasible ? '#f0fdf4' : '#fffbeb') + '; border-color:' + (p.feasible ? '#bbf7d0' : '#fde68a') + '; color:' + (p.feasible ? '#166534' : '#b45309') + '; margin-top:8px;">' +
           '<strong>Resolver Explanation:</strong> ' + esc(p.explanation) +
+          (!p.feasible ? '<div style="margin-top:6px; font-size:12px; color:#92400e;">Automatic resolution cannot find a free room or valid slot satisfying all constraints. Use Timetable Management to manually adjust this session.</div>' : '') +
           '</div></div>' +
           '<div class="diff-view">' +
           '<div class="diff-col">' +
           '<h4>Current Assignment <span class="badge badge-muted">Original</span></h4>' +
-          '<div class="diff-item"><span class="diff-label">Subject</span><span class="diff-value">' + esc(orig.subject) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Section</span><span class="diff-value">' + esc(orig.section) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Faculty</span><span class="diff-value">' + esc(orig.faculty) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Room</span><span class="diff-value">' + esc(orig.room) + ' (Cap: ' + orig.roomCapacity + ')</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Day & Time</span><span class="diff-value">' + esc(orig.day) + ' ' + esc(orig.startTime) + ' - ' + esc(orig.endTime) + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Subject</span><span class="diff-value">' + esc(orig.subject || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Section</span><span class="diff-value">' + esc(orig.section || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Faculty</span><span class="diff-value">' + esc(orig.faculty || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Room</span><span class="diff-value">' + esc(orig.room || "N/A") + origCap + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Day & Time</span><span class="diff-value">' + esc(orig.day || "") + ' ' + esc(orig.startTime || "") + ' - ' + esc(orig.endTime || "") + '</span></div>' +
           '</div>' +
           '<div class="diff-col proposed">' +
           '<h4>Proposed Assignment <span class="badge badge-success">Optimized</span></h4>' +
-          '<div class="diff-item"><span class="diff-label">Subject</span><span class="diff-value">' + esc(prop.subject) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Section</span><span class="diff-value">' + esc(prop.section) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Faculty</span><span class="diff-value">' + esc(prop.faculty) + '</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Room</span><span class="diff-value ' + (isRoomChanged ? 'diff-highlight' : '') + '">' + esc(prop.room) + ' (Cap: ' + prop.roomCapacity + ')</span></div>' +
-          '<div class="diff-item"><span class="diff-label">Day & Time</span><span class="diff-value ' + (isTimeChanged ? 'diff-highlight' : '') + '">' + esc(prop.day) + ' ' + esc(prop.startTime) + ' - ' + esc(prop.endTime) + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Subject</span><span class="diff-value">' + esc(prop.subject || orig.subject || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Section</span><span class="diff-value">' + esc(prop.section || orig.section || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Faculty</span><span class="diff-value">' + esc(prop.faculty || orig.faculty || "N/A") + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Room</span><span class="diff-value ' + (isRoomChanged ? 'diff-highlight' : '') + '">' + esc(prop.room || orig.room || "N/A") + propCap + '</span></div>' +
+          '<div class="diff-item"><span class="diff-label">Day & Time</span><span class="diff-value ' + (isTimeChanged ? 'diff-highlight' : '') + '">' + esc(prop.day || orig.day || "") + ' ' + esc(prop.startTime || orig.startTime || "") + ' - ' + esc(prop.endTime || orig.endTime || "") + '</span></div>' +
           '</div>' +
           '</div>' +
-          '<div class="modal-footer" style="margin:20px -20px -20px -20px;">' +
-          '<button type="button" class="btn btn-secondary modal-cancel-btn">Cancel</button>' +
-          '<button type="button" class="btn btn-secondary" id="btn-reject-proposal" style="color:#dc2626;">Reject Proposal</button>' +
-          '<button type="button" class="btn btn-primary" id="btn-apply-proposal" ' + (!p.feasible ? 'disabled' : '') + '>' +
-          I.svg("check", 16) + ' Apply Resolution</button>' +
-          '</div>';
+          '<div class="modal-footer" style="margin:20px -20px -20px -20px; display:flex; justify-content:space-between; align-items:center;">' +
+          '<div><button type="button" class="btn btn-secondary modal-cancel-btn">Cancel</button></div>' +
+          '<div style="display:flex; gap:8px;">' +
+          (!p.feasible
+            ? '<a href="#/timetables" class="btn btn-secondary modal-close-btn" style="background:#fef3c7; color:#92400e; border-color:#fde68a;">Edit in Timetables</a>'
+            : '<button type="button" class="btn btn-secondary" id="btn-reject-proposal" style="color:#dc2626;">Reject Proposal</button>' +
+              '<button type="button" class="btn btn-primary" id="btn-apply-proposal" style="background:#16a34a; border-color:#15803d;">' +
+              I.svg("check", 16) + ' Apply Resolution</button>'
+          ) +
+          '</div></div>';
 
-        $("#btn-apply-proposal").onclick = function () {
-          this.disabled = true;
-          this.textContent = "Applying changes...";
-          API.applyResolution(p).then(function (applyRes) {
-            closeModal();
-            toast("Resolution applied to draft timetable! Clash detection re-evaluated.");
-            if (applyRes.newReport) {
-              refreshClashStats(applyRes.newReport);
-            } else {
-              triggerDetection();
-            }
-          }).catch(function (e) { toast(e.message, true); });
-        };
+        var applyBtn = $("#btn-apply-proposal");
+        if (applyBtn) {
+          applyBtn.onclick = function () {
+            this.disabled = true;
+            this.textContent = "Applying changes...";
+            API.applyResolution(p).then(function (applyRes) {
+              closeModal();
+              toast("Resolution applied to draft timetable! Clash detection re-evaluated.");
+              if (applyRes.newReport) {
+                refreshClashStats(applyRes.newReport);
+              } else {
+                triggerDetection();
+              }
+            }).catch(function (e) {
+              toast(e.message, true);
+              applyBtn.disabled = false;
+              applyBtn.innerHTML = I.svg("check", 16) + ' Apply Resolution';
+            });
+          };
+        }
 
-        $("#btn-reject-proposal").onclick = function () {
-          API.rejectResolution(p.clashId, "Rejected by administrator").then(function () {
-            closeModal();
-            toast("Proposal marked as rejected.");
-          }).catch(function (e) { toast(e.message, true); });
-        };
+        var rejectBtn = $("#btn-reject-proposal");
+        if (rejectBtn) {
+          rejectBtn.onclick = function () {
+            API.rejectResolution(p.clashId, "Rejected by administrator").then(function () {
+              closeModal();
+              toast("Proposal marked as rejected.");
+            }).catch(function (e) { toast(e.message, true); });
+          };
+        }
       }).catch(function (err) {
         var mb = $("#resolver-modal-body");
         if (mb) mb.innerHTML = '<div style="color:#dc2626; padding:20px;">Failed to query C++ resolver: ' + esc(err.message) + '</div>';
@@ -1117,8 +1135,10 @@
           html += '</tbody></table></div>';
         }
 
-        html += '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px;">' +
+        html += '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px; flex-wrap:wrap;">' +
           '<button type="button" class="btn btn-secondary modal-close-btn">Cancel</button>' +
+          '<a href="' + API.getResolvedTimetableExportUrl() + '" class="btn btn-secondary" target="_blank" download="resolved_timetable.csv" style="color:#166534; background:#f0fdf4; border-color:#bbf7d0;">' +
+          I.svg("download", 16) + ' Download Resolved Timetable (CSV)</a>' +
           '<button type="button" class="btn btn-primary" id="btn-apply-batch-to-draft" style="background:#16a34a; border-color:#15803d;">' +
           I.svg("check", 16) + ' Apply All ' + applied.length + ' Fixes to Draft Timetable</button>' +
           '</div>';

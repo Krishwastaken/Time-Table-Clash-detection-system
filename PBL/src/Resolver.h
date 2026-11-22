@@ -79,6 +79,11 @@ struct SingleClashProposal {
     std::string action = "CHANGE_ROOM"; // "CHANGE_ROOM", "CHANGE_TIME", "REMOVE_DUPLICATE"
     bool feasible = false;
     std::size_t targetSessionIndex = 0;
+    std::string originalSubject;
+    std::string originalSection;
+    std::string originalFaculty;
+    int originalCapacity = 0;
+    int originalStudents = 0;
     std::string originalRoom;
     std::string proposedRoom;
     std::string originalDay;
@@ -87,6 +92,7 @@ struct SingleClashProposal {
     std::string proposedStartTime;
     std::string originalEndTime;
     std::string proposedEndTime;
+    int proposedCapacity = 0;
     std::string explanation;
     std::size_t clashesBefore = 0;
     std::size_t clashesAfter = 0;

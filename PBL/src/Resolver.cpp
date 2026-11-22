@@ -223,15 +223,21 @@ public:
 
             if (a.lab) {
                 auto hosts = labHosts_.find(a.baseSubject);
-                if (hosts == labHosts_.end() || !hosts->second.count(room))
-                    continue;                               // only labs that already run this subject
+                bool isRegisteredHost = (hosts != labHosts_.end() && hosts->second.count(room));
+                const int cap = capacityOfRoomName(room);
+                if (!isRegisteredHost && cap < a.students)
+                    continue;
             } else if (!inAudi && room.find("AUDI") != string::npos) {
                 continue;                                   // keep the auditorium for its own lectures
             }
 
             const int cap = capacityOfRoomName(room);
-            if (cap > 0)
-                found.push_back({cap, room});
+            if (cap > 0) {
+                auto hosts = labHosts_.find(a.baseSubject);
+                bool isRegisteredHost = a.lab && (hosts != labHosts_.end() && hosts->second.count(room));
+                int priorityTier = (a.lab && !isRegisteredHost) ? 1 : 0;
+                found.push_back({priorityTier * 10000 + cap, room});
+            }
         }
 
         sort(found.begin(), found.end());
@@ -570,6 +576,11 @@ SingleClashProposal proposeSingleClash(int clashIndex,
     const Session& s1 = sessions[s1_idx];
 
     prop.targetSessionIndex = s1_idx;
+    prop.originalSubject = s1.getSubject();
+    prop.originalSection = s1.getSection();
+    prop.originalFaculty = s1.getFaculty();
+    prop.originalCapacity = s1.getRoomCapacity();
+    prop.originalStudents = s1.getStudentCount();
     prop.originalRoom = s1.getRoom();
     prop.proposedRoom = s1.getRoom();
     prop.originalDay = s1.getDay();
@@ -578,6 +589,7 @@ SingleClashProposal proposeSingleClash(int clashIndex,
     prop.proposedStartTime = s1.getStartTime();
     prop.originalEndTime = s1.getEndTime();
     prop.proposedEndTime = s1.getEndTime();
+    prop.proposedCapacity = prop.originalCapacity;
 
     // Run greedy resolver on a copy of sessions
     vector<Session> copy = sessions;
@@ -592,6 +604,11 @@ SingleClashProposal proposeSingleClash(int clashIndex,
             prop.feasible = true;
             prop.targetSessionIndex = app.sessionIndex;
             const Session& target = sessions[app.sessionIndex];
+            prop.originalSubject = target.getSubject();
+            prop.originalSection = target.getSection();
+            prop.originalFaculty = target.getFaculty();
+            prop.originalCapacity = target.getRoomCapacity();
+            prop.originalStudents = target.getStudentCount();
             prop.originalRoom = target.getRoom();
             prop.originalDay = target.getDay();
             prop.originalStartTime = target.getStartTime();
@@ -603,6 +620,8 @@ SingleClashProposal proposeSingleClash(int clashIndex,
             if (app.kind == FixKind::RemoveDuplicate) {
                 prop.action = "REMOVE_DUPLICATE";
                 prop.explanation = app.reason;
+                prop.proposedRoom = "[REMOVED]";
+                prop.proposedCapacity = 0;
                 return prop;
             } else if (app.kind == FixKind::ChangeRoom) {
                 prop.action = "CHANGE_ROOM";
@@ -613,6 +632,7 @@ SingleClashProposal proposeSingleClash(int clashIndex,
                 } else {
                     prop.proposedRoom = app.to;
                 }
+                prop.proposedCapacity = capacityOfRoomName(prop.proposedRoom);
                 prop.explanation = app.reason;
                 return prop;
             }
@@ -620,38 +640,39 @@ SingleClashProposal proposeSingleClash(int clashIndex,
     }
 
     // If room resolution alone couldn't fix it (e.g. overlapping faculty/section), try time slot shift
-    if (s2_idx != static_cast<size_t>(-1) && s2_idx < sessions.size()) {
-        const Session& s2 = sessions[s2_idx];
-        prop.targetSessionIndex = s2_idx;
-        prop.originalRoom = s2.getRoom();
-        prop.proposedRoom = s2.getRoom();
-        prop.originalDay = s2.getDay();
-        prop.proposedDay = s2.getDay();
-        prop.originalStartTime = s2.getStartTime();
-        prop.proposedEndTime = s2.getEndTime();
+    vector<size_t> candidateIndices;
+    if (s2_idx != static_cast<size_t>(-1) && s2_idx < sessions.size()) candidateIndices.push_back(s2_idx);
+    candidateIndices.push_back(s1_idx);
 
-        const vector<pair<string, string>> standardSlots = {
-            {"08:00", "08:55"}, {"09:00", "09:55"}, {"10:00", "10:55"},
-            {"11:10", "12:05"}, {"12:10", "13:05"}, {"13:55", "14:50"},
-            {"14:55", "15:50"}, {"16:05", "17:00"}, {"17:00", "17:55"}
-        };
+    const vector<string> standardStartTimes = {
+        "08:00", "09:00", "10:00", "11:10", "12:10", "13:55", "14:55", "16:05", "17:00"
+    };
 
-        for (const auto& slot : standardSlots) {
-            int slotStart = toMinutes(slot.first);
-            int slotEnd = toMinutes(slot.second);
+    for (size_t candIdx : candidateIndices) {
+        const Session& cand = sessions[candIdx];
+        int duration = toMinutes(cand.getEndTime()) - toMinutes(cand.getStartTime());
+        if (duration <= 0) duration = 55;
+
+        for (const string& startSlot : standardStartTimes) {
+            int slotStart = toMinutes(startSlot);
+            int slotEnd = slotStart + duration;
+            if (slotEnd > toMinutes("18:00")) continue;
+            string endSlot = formatTime(slotEnd);
+
+            if (startSlot == cand.getStartTime() && endSlot == cand.getEndTime()) continue;
+
             bool free = true;
-
             for (size_t i = 0; i < sessions.size(); ++i) {
-                if (i == s2_idx) continue;
+                if (i == candIdx) continue;
                 const Session& other = sessions[i];
-                if (other.getDay() != s2.getDay()) continue;
+                if (other.getDay() != cand.getDay()) continue;
 
                 int oStart = toMinutes(other.getStartTime());
                 int oEnd = toMinutes(other.getEndTime());
                 if (std::max(slotStart, oStart) < std::min(slotEnd, oEnd)) {
-                    if (other.getFaculty() == s2.getFaculty() ||
-                        other.getSection() == s2.getSection() ||
-                        other.getRoom() == s2.getRoom()) {
+                    if ((!cand.getFaculty().empty() && other.getFaculty() == cand.getFaculty()) ||
+                        (!cand.getSection().empty() && other.getSection() == cand.getSection()) ||
+                        (!cand.getRoom().empty() && other.getRoom() == cand.getRoom())) {
                         free = false;
                         break;
                     }
@@ -659,13 +680,27 @@ SingleClashProposal proposeSingleClash(int clashIndex,
             }
 
             if (free) {
+                prop.targetSessionIndex = candIdx;
+                prop.originalSubject = cand.getSubject();
+                prop.originalSection = cand.getSection();
+                prop.originalFaculty = cand.getFaculty();
+                prop.originalCapacity = cand.getRoomCapacity();
+                prop.originalStudents = cand.getStudentCount();
+                prop.originalRoom = cand.getRoom();
+                prop.proposedRoom = cand.getRoom();
+                prop.originalDay = cand.getDay();
+                prop.proposedDay = cand.getDay();
+                prop.originalStartTime = cand.getStartTime();
+                prop.proposedStartTime = startSlot;
+                prop.originalEndTime = cand.getEndTime();
+                prop.proposedEndTime = endSlot;
+                prop.proposedCapacity = prop.originalCapacity;
+
                 prop.action = "CHANGE_TIME";
                 prop.feasible = true;
-                prop.proposedStartTime = slot.first;
-                prop.proposedEndTime = slot.second;
-                prop.explanation = "Reschedule session for section " + s2.getSection() +
-                                   " to " + s2.getDay() + " " + slot.first + "-" + slot.second +
-                                   " in " + s2.getRoom() + " where faculty is available.";
+                prop.explanation = "Reschedule " + cand.getSubject() + " (Section " + cand.getSection() +
+                                   ") to " + cand.getDay() + " " + startSlot + "-" + endSlot +
+                                   " in " + cand.getRoom() + " where faculty, section, and venue are free.";
                 prop.clashesAfter = res.clashesBefore > 0 ? res.clashesBefore - 1 : 0;
                 return prop;
             }

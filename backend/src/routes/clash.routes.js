@@ -1,5 +1,5 @@
 const { requireAuth, sendJSON, sendError } = require('../middleware');
-const { runClashDetection, getLatestClashRun, proposeResolutionForClash, applyProposalToDraft, resolveAllClashes } = require('../services/cpp_engine.service');
+const { runClashDetection, getLatestClashRun, proposeResolutionForClash, applyProposalToDraft, resolveAllClashes, exportResolvedTimetableCSV } = require('../services/cpp_engine.service');
 const auditService = require('../services/audit.service');
 const db = require('../db');
 
@@ -114,6 +114,16 @@ function handleClashRoutes(req, res, url, body) {
     });
 
     return sendJSON(res, { ok: true, message: 'Resolution proposal rejected.' });
+  }
+
+  // GET /api/clash/resolved-timetable: Direct download of resolved timetable CSV
+  if (url.pathname === '/api/clash/resolved-timetable' && req.method === 'GET') {
+    const csvData = exportResolvedTimetableCSV();
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="resolved_timetable.csv"');
+    res.writeHead(200);
+    res.end(csvData);
+    return true;
   }
 
   // 6. GET /api/clash/export: Export conflict report as CSV or Markdown

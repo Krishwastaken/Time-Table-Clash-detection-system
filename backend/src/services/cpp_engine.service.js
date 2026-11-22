@@ -158,6 +158,25 @@ function proposeResolutionForClash(clashIndex) {
     }
 
     const proposal = JSON.parse(res.stdout);
+
+    // Defensive fallback: ensure subject, section, faculty, capacity are populated
+    if (proposal && proposal.original && !proposal.original.subject && proposal.targetSessionIndex != null) {
+      const draftSessions = db.all('SELECT * FROM timetable_sessions WHERE is_draft = 1 ORDER BY day, start_time');
+      const target = draftSessions[proposal.targetSessionIndex];
+      if (target) {
+        proposal.original.subject = proposal.original.subject || target.subject;
+        proposal.original.section = proposal.original.section || target.section;
+        proposal.original.faculty = proposal.original.faculty || target.faculty;
+        proposal.original.roomCapacity = proposal.original.roomCapacity || target.room_capacity || 0;
+        proposal.original.studentCount = proposal.original.studentCount || target.student_count || 0;
+        if (proposal.proposed) {
+          proposal.proposed.subject = proposal.proposed.subject || proposal.original.subject;
+          proposal.proposed.section = proposal.proposed.section || proposal.original.section;
+          proposal.proposed.faculty = proposal.proposed.faculty || proposal.original.faculty;
+        }
+      }
+    }
+
     return { ok: true, proposal };
   } finally {
     try { fs.unlinkSync(tmpCSV); } catch (e) { /* ignore */ }
@@ -319,10 +338,36 @@ function resolveAllClashes({ adminId, adminName, applyToDraft = false } = {}) {
   }
 }
 
+function exportResolvedTimetableCSV() {
+  ensureBinary();
+  const tmpCSV = dumpDraftSessionsToCSV();
+  const tmpOut = path.join(os.tmpdir(), `timetable_resolved_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.csv`);
+
+  try {
+    const res = spawnSync(config.ENGINE_BIN, ['resolve', tmpCSV, '--out', tmpOut], {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024
+    });
+
+    if (res.status === 0 && fs.existsSync(tmpOut)) {
+      return fs.readFileSync(tmpOut, 'utf8');
+    }
+
+    return fs.readFileSync(tmpCSV, 'utf8');
+  } catch (err) {
+    console.error('Failed to export resolved timetable:', err);
+    return fs.readFileSync(tmpCSV, 'utf8');
+  } finally {
+    try { fs.unlinkSync(tmpCSV); } catch (e) { /* ignore */ }
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) { /* ignore */ }
+  }
+}
+
 module.exports = {
   runClashDetection,
   getLatestClashRun,
   proposeResolutionForClash,
   applyProposalToDraft,
-  resolveAllClashes
+  resolveAllClashes,
+  exportResolvedTimetableCSV
 };
