@@ -1,4 +1,5 @@
 #include "ClashDetector.h"
+#include "TimeUtils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -11,105 +12,11 @@
 
 using namespace std;
 
+using namespace TimeUtils;
+
 namespace {
 
 const size_t NO_SECOND_SESSION = static_cast<size_t>(-1);
-
-// Trim and convert to upper case.
-string normalize(const string& value) {
-    auto first = find_if_not(
-        value.begin(), value.end(),
-        [](unsigned char c) { return isspace(c); }
-    );
-
-    auto last = find_if_not(
-        value.rbegin(), value.rend(),
-        [](unsigned char c) { return isspace(c); }
-    ).base();
-
-    if (first >= last)
-        return "";
-
-    string result(first, last);
-
-    transform(
-        result.begin(), result.end(), result.begin(),
-        [](unsigned char c) { return static_cast<char>(toupper(c)); }
-    );
-
-    return result;
-}
-
-// Room names: upper case, single spaces, no spaces around '-'
-// ("CR - 7", "cr-7" and "CR-7" all become "CR-7").
-string normalizeRoom(const string& value) {
-    const string upper = normalize(value);
-    string result;
-
-    for (size_t i = 0; i < upper.size(); ++i) {
-        const char c = upper[i];
-
-        if (isspace(static_cast<unsigned char>(c))) {
-            if (!result.empty() && result.back() != ' ' && result.back() != '-')
-                result += ' ';
-            continue;
-        }
-
-        if (c == '-' && !result.empty() && result.back() == ' ')
-            result.pop_back();
-
-        result += c;
-    }
-
-    while (!result.empty() && result.back() == ' ')
-        result.pop_back();
-
-    return result;
-}
-
-// Convert HH:MM to minutes after midnight; -1 for invalid values.
-int toMinutes(const string& time) {
-    string value = normalize(time);
-
-    if (value.size() != 5 || value[2] != ':')
-        return -1;
-
-    if (!isdigit(static_cast<unsigned char>(value[0])) ||
-        !isdigit(static_cast<unsigned char>(value[1])) ||
-        !isdigit(static_cast<unsigned char>(value[3])) ||
-        !isdigit(static_cast<unsigned char>(value[4]))) {
-        return -1;
-    }
-
-    int hours = stoi(value.substr(0, 2));
-    int minutes = stoi(value.substr(3, 2));
-
-    if (hours > 23 || minutes > 59)
-        return -1;
-
-    return hours * 60 + minutes;
-}
-
-// Which weeks a session is active in. Saturday classes only exist when
-// Saturday is a working day; "*" classes only when it is off.
-WeekRule effectiveRule(const Session& session) {
-    if (session.getWeekRule() != WeekRule::Always)
-        return session.getWeekRule();
-
-    if (session.getDayIndex() == 5)
-        return WeekRule::SaturdayWorkingOnly;
-
-    return WeekRule::Always;
-}
-
-// Weeks in which BOTH sessions run. Returns false when there is no such
-// week, i.e. the pair can never be active together.
-bool combineRules(WeekRule a, WeekRule b, WeekRule& result) {
-    if (a == WeekRule::Always) { result = b; return true; }
-    if (b == WeekRule::Always) { result = a; return true; }
-    if (a == b)                { result = a; return true; }
-    return false;
-}
 
 string withScenario(const string& text, WeekRule rule) {
     if (rule == WeekRule::SaturdayOffOnly)
@@ -121,133 +28,6 @@ string withScenario(const string& text, WeekRule rule) {
     return text;
 }
 
-// Free periods and non-class activities never occupy a room or a teacher.
-bool isFreeActivity(const string& subjectUpper) {
-    return subjectUpper == "LUNCH" ||
-           subjectUpper == "LIB" ||
-           subjectUpper == "SWAYAM" ||
-           subjectUpper.find("AUDIT COURSE") != string::npos ||
-           subjectUpper.find("TRAINING") != string::npos ||
-           subjectUpper.find("EXTRA-CURRICULAR") != string::npos;
-}
-
-// "G1", "G2" ... from a subject such as "Data Structures Lab (G1)".
-string extractGroup(const string& subjectUpper) {
-    size_t pos = subjectUpper.find("(G");
-
-    if (pos == string::npos)
-        return "";
-
-    size_t end = subjectUpper.find(')', pos);
-
-    if (end == string::npos)
-        return "";
-
-    string group = subjectUpper.substr(pos + 1, end - pos - 1);
-
-    if (group.size() < 2 || group[0] != 'G')
-        return "";
-
-    for (size_t i = 1; i < group.size(); i++) {
-        if (!isdigit(static_cast<unsigned char>(group[i])))
-            return "";
-    }
-
-    return group;
-}
-
-// Split "Hon'ble President Sir / Mr. A & Ms. B" into individual people:
-// upper case, honorifics and "G1-" prefixes removed, unknowns dropped.
-vector<string> facultyNames(const string& raw, bool ignorePresident) {
-    vector<string> names;
-    string token;
-    vector<string> tokens;
-
-    for (size_t i = 0; i <= raw.size(); ++i) {
-        const char c = (i < raw.size()) ? raw[i] : '/';
-
-        if (c == '/' || c == '&' || c == ',' || c == ';') {
-            tokens.push_back(token);
-            token.clear();
-        } else {
-            token += c;
-        }
-    }
-
-    static const char* const honorifics[] =
-        { "PROF", "MRS", "DR", "MR", "MS" };
-
-    for (const string& rawToken : tokens) {
-        string name = normalize(rawToken);
-
-        if (name.empty())
-            continue;
-
-        // Group label such as "G1-" or "G2 -".
-        if (name.size() > 2 && name[0] == 'G' &&
-            isdigit(static_cast<unsigned char>(name[1]))) {
-            size_t dash = name.find('-');
-            if (dash != string::npos)
-                name = normalize(name.substr(dash + 1));
-        }
-
-        for (const char* prefix : honorifics) {
-            const string p = prefix;
-            if (name.compare(0, p.size(), p) == 0 &&
-                name.size() > p.size() &&
-                (name[p.size()] == '.' || name[p.size()] == ' ')) {
-                name = normalize(name.substr(p.size() + 1));
-                break;
-            }
-        }
-
-        // Collapse inner whitespace.
-        string collapsed;
-        for (char c : name) {
-            if (isspace(static_cast<unsigned char>(c))) {
-                if (!collapsed.empty() && collapsed.back() != ' ')
-                    collapsed += ' ';
-            } else {
-                collapsed += c;
-            }
-        }
-        name = collapsed;
-
-        if (name.empty() || name == "NOT SPECIFIED" || name == "NA" ||
-            name == "N/A" || name == "TBA")
-            continue;
-
-        if (ignorePresident && name.find("PRESIDENT") != string::npos)
-            continue;
-
-        if (find(names.begin(), names.end(), name) == names.end())
-            names.push_back(name);
-    }
-
-    return names;
-}
-
-// A session may use several rooms ("Lab-7 & Lab-6"). Unknown and online
-// sessions use no physical room.
-vector<string> roomNames(const string& raw) {
-    vector<string> names;
-    string token;
-
-    for (size_t i = 0; i <= raw.size(); ++i) {
-        if (i == raw.size() || raw[i] == '&') {
-            const string name = normalizeRoom(token);
-            token.clear();
-
-            if (!name.empty() && name != "UNKNOWN" && name != "ONLINE" &&
-                find(names.begin(), names.end(), name) == names.end())
-                names.push_back(name);
-        } else {
-            token += raw[i];
-        }
-    }
-
-    return names;
-}
 
 // Everything the detector needs about each session, computed once so the
 // sweep never re-parses strings.
@@ -366,15 +146,7 @@ string clashTypeName(ClashType type) {
     return "UNKNOWN CLASH";
 }
 
-// Sweep Line over one resource (one room, one teacher or one section).
-//
-// Sessions are visited in order of start time. "active" holds the sessions
-// that have started and not yet finished. When a session starts, every
-// active session overlaps it, because
-//     start(active) <= start(new)  and  end(active) > start(new).
-// A session whose end <= the new start is dropped first, so classes that
-// merely touch (09:55 end / 09:55 start) never overlap.
-// Time: O(k log k + number of reported pairs) instead of O(k^2).
+
 template <typename OnOverlap>
 void sweepResource(const vector<size_t>& group, const Prepared& p,
                    OnOverlap onOverlap) {
@@ -418,8 +190,7 @@ void sweepResource(const vector<size_t>& group, const Prepared& p,
 //   Always            - sessions held every week
 //   SaturdayOffOnly   - those plus the "*" classes
 //   SaturdayWorkingOnly - those plus the Saturday classes
-// A pass reports an overflow only if it involves a session of its own
-// week type, so nothing is reported twice.
+
 template <typename OnOverflow>
 void sweepPool(const vector<size_t>& group, const Prepared& p, size_t capacity,
                WeekRule weeks, OnOverflow onOverflow) {

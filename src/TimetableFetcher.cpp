@@ -15,16 +15,14 @@
 
 namespace
 {
-    // ------------------------------------------------------------
     // Data structures
-    // ------------------------------------------------------------
 
     struct ParsedCell
     {
         std::string text;
         int colSpan;
         int rowSpan;
-        int width;          // the HTML width="" attribute in pixels (0 = unknown)
+        int width;          
 
         ParsedCell() : colSpan(1), rowSpan(1), width(0) {}
     };
@@ -76,9 +74,7 @@ namespace
         "13:55", "14:50", "16:05", "17:00", "17:55"
     };
 
-    // ------------------------------------------------------------
     // Small string helpers
-    // ------------------------------------------------------------
 
     std::string readFile(const std::string& filePath)
     {
@@ -189,9 +185,7 @@ namespace
         return trim(cleaned);
     }
 
-    // ------------------------------------------------------------
     // HTML tag helpers
-    // ------------------------------------------------------------
 
     std::string getAttributeValue(const std::string& tag, const std::string& attribute)
     {
@@ -444,9 +438,8 @@ namespace
         return names;
     }
 
-    // ------------------------------------------------------------
     // Cell text splitting and normalisation
-    // ------------------------------------------------------------
+
 
     std::vector<std::string> splitCellSegments(const std::string& text)
     {
@@ -536,9 +529,7 @@ namespace
         return codes;
     }
 
-    // ------------------------------------------------------------
     // Rooms
-    // ------------------------------------------------------------
 
     // Returns one canonical room name for a cell (or part of a cell).
     //   LT-5, CR-7, Lab-2, New Lab-1, Digital Lab-1, GEHU-Audi (5th Floor),
@@ -617,9 +608,7 @@ namespace
         return "Unknown";
     }
 
-    // ------------------------------------------------------------
     // Reference table
-    // ------------------------------------------------------------
 
     SectionReference buildReference(const ParsedTable& table)
     {
@@ -669,9 +658,7 @@ namespace
         return ref;
     }
 
-    // ------------------------------------------------------------
     // Cell classification
-    // ------------------------------------------------------------
 
     // Returns a subject name for LUNCH / LIB / SWAYAM-Training cells,
     // or "" for anything else. These are kept in the timetable;
@@ -949,13 +936,7 @@ namespace
         return "";
     }
 
-    // Where each of the ten time slots sits horizontally (in HTML pixels).
-    //
-    // The Word-generated tables do not have a clean column grid: a header
-    // cell may span two columns while a body cell below it spans one, so
-    // counting columns places some classes in the wrong slot (it put Section
-    // G's Monday TMA-316 on top of a lab). The cell widths are reliable, so a
-    // cell belongs to every slot whose centre lies inside the cell.
+
     struct SlotGrid
     {
         std::vector<std::pair<int, int>> ranges;

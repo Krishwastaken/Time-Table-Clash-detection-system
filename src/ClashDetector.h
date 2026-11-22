@@ -26,37 +26,22 @@ struct Clash {
 
     std::string description;
 
-    // Weeks in which this clash really exists:
-    //   Always              - every week
-    //   SaturdayOffOnly     - only when Saturday is off (involves a "*" class)
-    //   SaturdayWorkingOnly - only when Saturday is a working day
     WeekRule scenario = WeekRule::Always;
 };
 
 class ClashDetector {
 public:
-    // Rooms that are really several identical rooms: normalised (upper case)
-    // room name -> number of sessions that may run there at once.
     using RoomPools = std::map<std::string, int>;
 
     // The pools used by default (the 4-lab Logic Design lab block).
     static RoomPools defaultRoomPools();
 
-    // Returns all detected clashes. Does not modify the input vector.
-    //
-    // The input may be in any order (main() merge-sorts it first, which
-    // keeps the report in day/time order).
-    //
-    // ignorePresidentClass: when true, "Hon'ble President Sir" is not treated
-    // as a faculty member for faculty-clash purposes (he is a nominal name
-    // on many parallel lectures). The session itself still takes part in
-    // room and section checks.
+
     static std::vector<Clash> detectClashes(
         const std::vector<Session>& sessions,
         bool ignorePresidentClass = false
     );
 
-    // Same, with an explicit set of room pools.
     static std::vector<Clash> detectClashes(
         const std::vector<Session>& sessions,
         bool ignorePresidentClass,
