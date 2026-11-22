@@ -1,0 +1,52 @@
+name: Continuous Integration & Verification
+
+on:
+  push:
+    branches: [ main, Sanchit, integration ]
+  pull_request:
+    branches: [ main, Sanchit ]
+
+jobs:
+  build-and-test:
+    name: Build & Test Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node-version: [18.x, 20.x]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: backend/package.json
+
+      - name: Set up C++ Build Tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y build-essential g++ make
+
+      - name: Compile Native C++ Clash & Resolver Engine
+        run: make -C PBL bin/engine_cli
+
+      - name: Execute C++ Unit Tests (Sweep-line, Welsh-Powell, Sorting)
+        run: make -C PBL test
+
+      - name: Install Backend Dependencies
+        working-directory: backend
+        run: npm ci || npm install
+
+      - name: Run Backend REST API & Integration Tests
+        run: npm test --prefix backend
+
+      - name: Run Frontend Client & Authentication Tests
+        run: |
+          node adminfrontend/tests/auth.test.js
+          node adminfrontend/tests/live_auth.test.js
+
+      - name: Execute Multi-Layer Verification Runner
+        run: bash scripts/run_all_tests.sh

@@ -441,9 +441,12 @@ The server will start on **http://localhost:3000** and will serve:
 - The **Admin Portal UI** at `http://localhost:3000` (or `http://localhost:3000/adminfrontend/`).
 - The **REST API** at `http://localhost:3000/api`.
 
-### 4. Administrator Login Credentials
-Sign in using any provisioned administrator record from `data/admin_master.csv`:
-- **Email:** `rajesh.verma@geu.ac.in`
-- **Password:** `Rv@4821#tt`
-- *(Alternatively sign in using Admin ID: `GEU-F001` with the same password)*
-- *(Demonstration access remains available via "Continue with demo access" for sandbox evaluation)*
+### 5. Unified Automated Test Runner
+Run all C++, Backend, Integration, and Frontend test suites with one command:
+```sh
+./scripts/run_all_tests.sh
+```
+
+### 6. Continuous Integration (CI/CD)
+Automated GitHub Actions workflows (`.github/workflows/ci.yml`) automatically validate every pull request and push across Ubuntu and macOS with C++ compilation and test suites.
+
