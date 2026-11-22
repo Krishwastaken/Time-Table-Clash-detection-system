@@ -1,4 +1,5 @@
 #include "Input.h"
+#include "TimetableFetcher.h"
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -57,6 +58,13 @@ std::vector<std::string> parseCSVLine(const std::string& line) {
 
 std::vector<Session> loadSessionsFromCSV(const std::string& filepath) {
     std::vector<Session> sessions;
+
+    if (filepath.size() >= 5 && (filepath.substr(filepath.size() - 5) == ".html" || filepath.substr(filepath.size() - 4) == ".htm")) {
+        if (TimetableFetcher::generateAllSections(filepath, {}, sessions)) {
+            return sessions;
+        }
+    }
+
     std::ifstream file(filepath);
 
     if (!file.is_open()) {

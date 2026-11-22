@@ -157,6 +157,9 @@
     resolveClash: function (clashIndex) {
       return req("POST", "/api/clash/resolve", { clashIndex: clashIndex });
     },
+    resolveAllClashes: function (applyToDraft) {
+      return req("POST", "/api/clash/resolve-all", { apply: !!applyToDraft });
+    },
     applyResolution: function (proposal) {
       return req("POST", "/api/clash/apply", { proposal: proposal });
     },

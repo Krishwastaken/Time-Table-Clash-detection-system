@@ -4,12 +4,15 @@
 #include <string>
 #include <sstream>
 #include <iomanip>
+#include <cctype>
 #include "Session.h"
 #include "Input.h"
 #include "ClashDetector.h"
 #include "ConflictAnalysis.h"
 #include "ReportFormatter.h"
 #include "Resolver.h"
+#include "JsonExport.h"
+#include "TimetableFetcher.h"
 
 namespace {
 
@@ -97,10 +100,11 @@ int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <mode> [args...]\n"
                   << "Modes:\n"
-                  << "  detect <file.csv> [--json] [--out <file>]\n"
-                  << "  resolve <file.csv> [clash_index] [--json]\n"
+                  << "  detect <file.csv|html> [--json] [--out <file>]\n"
+                  << "  resolve <file.csv|html> [clash_index] [--json]\n"
+                  << "  export <in_file> <out.json>\n"
                   << "  apply <in.csv> <target_idx> <room> <day> <start> <end> <out.csv>\n"
-                  << "  summary <file.csv>\n";
+                  << "  summary <file.csv|html>\n";
         return 1;
     }
 
@@ -108,7 +112,7 @@ int main(int argc, char* argv[]) {
 
     if (mode == "detect") {
         if (argc < 3) {
-            std::cerr << "Error: detect requires CSV file path\n";
+            std::cerr << "Error: detect requires CSV or HTML file path\n";
             return 1;
         }
         std::string csvPath = argv[2];
@@ -124,7 +128,7 @@ int main(int argc, char* argv[]) {
         }
 
         std::vector<Session> sessions = loadSessionsFromCSV(csvPath);
-        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions);
+        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions, true);
 
         int facCount = 0, roomCount = 0, secCount = 0, capCount = 0, dupCount = 0;
         for (const auto& c : clashes) {
@@ -137,6 +141,7 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        auto incidents = ConflictAnalysis::consolidate(clashes, sessions);
         auto groups = ConflictAnalysis::connectedGroups(clashes, sessions.size());
 
         if (jsonOutput) {
@@ -151,6 +156,7 @@ int main(int argc, char* argv[]) {
                << "    \"Room capacity\": " << capCount << ",\n"
                << "    \"Duplicate session\": " << dupCount << "\n"
                << "  },\n"
+               << "  \"distinctIncidentsCount\": " << incidents.size() << ",\n"
                << "  \"connectedGroupsCount\": " << groups.size() << ",\n"
                << "  \"clashes\": [\n";
 
@@ -193,70 +199,114 @@ int main(int argc, char* argv[]) {
 
     if (mode == "resolve") {
         if (argc < 3) {
-            std::cerr << "Error: resolve requires CSV file path\n";
+            std::cerr << "Error: resolve requires file path\n";
             return 1;
         }
         std::string csvPath = argv[2];
         int targetClashIdx = -1;
         bool jsonOutput = false;
+        std::string outPath;
 
         for (int i = 3; i < argc; ++i) {
             std::string arg = argv[i];
             if (arg == "--json") jsonOutput = true;
-            else if (targetClashIdx == -1 && std::isdigit(arg[0])) {
+            else if (arg == "--out" && i + 1 < argc) {
+                outPath = argv[++i];
+            }
+            else if (targetClashIdx == -1 && std::isdigit(static_cast<unsigned char>(arg[0]))) {
                 targetClashIdx = std::stoi(arg);
             }
         }
 
         std::vector<Session> sessions = loadSessionsFromCSV(csvPath);
-        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions);
+        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions, true);
 
         if (targetClashIdx >= 0) {
-            ResolutionProposal p = Resolver::proposeResolution(static_cast<size_t>(targetClashIdx), clashes, sessions);
+            auto p = Resolver::proposeSingleClash(targetClashIdx, clashes, sessions);
             if (jsonOutput) {
                 std::cout << "{\n"
                           << "  \"clashIndex\": " << p.clashIndex << ",\n"
-                          << "  \"clashId\": \"CLASH-" << (p.clashIndex + 1) << "\",\n"
+                          << "  \"clashId\": \"" << p.clashId << "\",\n"
                           << "  \"feasible\": " << (p.feasible ? "true" : "false") << ",\n"
                           << "  \"action\": \"" << p.action << "\",\n"
                           << "  \"explanation\": \"" << jsonEscape(p.explanation) << "\",\n"
                           << "  \"targetSessionIndex\": " << p.targetSessionIndex << ",\n"
-                          << "  \"original\": " << sessionToJSON(p.originalSession, p.targetSessionIndex) << ",\n"
-                          << "  \"proposed\": " << sessionToJSON(p.proposedSession, p.targetSessionIndex) << "\n"
+                          << "  \"original\": {\"room\":\"" << jsonEscape(p.originalRoom) << "\",\"day\":\"" << jsonEscape(p.originalDay) << "\",\"startTime\":\"" << jsonEscape(p.originalStartTime) << "\",\"endTime\":\"" << jsonEscape(p.originalEndTime) << "\"},\n"
+                          << "  \"proposed\": {\"room\":\"" << jsonEscape(p.proposedRoom) << "\",\"day\":\"" << jsonEscape(p.proposedDay) << "\",\"startTime\":\"" << jsonEscape(p.proposedStartTime) << "\",\"endTime\":\"" << jsonEscape(p.proposedEndTime) << "\"},\n"
+                          << "  \"clashesBefore\": " << p.clashesBefore << ",\n"
+                          << "  \"clashesAfter\": " << p.clashesAfter << "\n"
                           << "}\n";
             } else {
                 std::cout << "Resolution Proposal for Clash #" << (p.clashIndex + 1) << ":\n";
                 std::cout << "Feasible: " << (p.feasible ? "Yes" : "No") << "\n";
                 std::cout << "Action: " << p.action << "\n";
                 std::cout << "Explanation: " << p.explanation << "\n";
-                std::cout << "Target Session #" << (p.targetSessionIndex + 1) << ": " << p.originalSession << "\n";
+                std::cout << "Original: " << p.originalDay << " " << p.originalStartTime << "-" << p.originalEndTime << " in " << p.originalRoom << "\n";
                 if (p.feasible) {
-                    std::cout << "Proposed: " << p.proposedSession << "\n";
+                    std::cout << "Proposed: " << p.proposedDay << " " << p.proposedStartTime << "-" << p.proposedEndTime << " in " << p.proposedRoom << "\n";
                 }
             }
         } else {
-            auto proposals = Resolver::proposeAllResolutions(clashes, sessions);
+            std::vector<Session> resolved = sessions;
+            ResolveResult r = Resolver::resolve(resolved, clashes);
+            if (!outPath.empty()) {
+                writeSessionsToCSV(outPath, resolved);
+            }
             if (jsonOutput) {
-                std::cout << "[\n";
-                for (size_t i = 0; i < proposals.size(); ++i) {
-                    const auto& p = proposals[i];
-                    std::cout << "  {\n"
-                              << "    \"clashIndex\": " << p.clashIndex << ",\n"
-                              << "    \"clashId\": \"CLASH-" << (p.clashIndex + 1) << "\",\n"
-                              << "    \"feasible\": " << (p.feasible ? "true" : "false") << ",\n"
-                              << "    \"action\": \"" << p.action << "\",\n"
-                              << "    \"explanation\": \"" << jsonEscape(p.explanation) << "\",\n"
-                              << "    \"targetSessionIndex\": " << p.targetSessionIndex << ",\n"
-                              << "    \"original\": " << sessionToJSON(p.originalSession, p.targetSessionIndex) << ",\n"
-                              << "    \"proposed\": " << sessionToJSON(p.proposedSession, p.targetSessionIndex) << "\n"
-                              << "  }" << (i + 1 < proposals.size() ? "," : "") << "\n";
+                std::cout << "{\n"
+                          << "  \"clashesBefore\": " << r.clashesBefore << ",\n"
+                          << "  \"clashesAfter\": " << r.clashesAfter << ",\n"
+                          << "  \"appliedCount\": " << r.applied.size() << ",\n"
+                          << "  \"unresolvedCount\": " << r.unresolved.size() << ",\n"
+                          << "  \"applied\": [\n";
+                for (size_t i = 0; i < r.applied.size(); ++i) {
+                    const auto& a = r.applied[i];
+                    std::cout << "    {\n"
+                              << "      \"kind\": \"" << (a.kind == FixKind::ChangeRoom ? "CHANGE_ROOM" : "REMOVE_DUPLICATE") << "\",\n"
+                              << "      \"sessionIndex\": " << a.sessionIndex << ",\n"
+                              << "      \"subject\": \"" << jsonEscape(a.subject) << "\",\n"
+                              << "      \"section\": \"" << jsonEscape(a.section) << "\",\n"
+                              << "      \"faculty\": \"" << jsonEscape(a.faculty) << "\",\n"
+                              << "      \"from\": \"" << jsonEscape(a.from) << "\",\n"
+                              << "      \"to\": \"" << jsonEscape(a.to) << "\",\n"
+                              << "      \"reason\": \"" << jsonEscape(a.reason) << "\"\n"
+                              << "    }" << (i + 1 < r.applied.size() ? "," : "") << "\n";
                 }
-                std::cout << "]\n";
+                std::cout << "  ],\n  \"unresolved\": [\n";
+                for (size_t i = 0; i < r.unresolved.size(); ++i) {
+                    const auto& u = r.unresolved[i];
+                    std::cout << "    {\n"
+                              << "      \"type\": \"" << clashTypeName(u.type) << "\",\n"
+                              << "      \"description\": \"" << jsonEscape(u.description) << "\",\n"
+                              << "      \"reason\": \"" << jsonEscape(u.reason) << "\"\n"
+                              << "    }" << (i + 1 < r.unresolved.size() ? "," : "") << "\n";
+                }
+                std::cout << "  ]\n}\n";
             } else {
-                std::cout << "Generated " << proposals.size() << " resolution proposals.\n";
+                Resolver::print(std::cout, r);
             }
         }
         return 0;
+    }
+
+    if (mode == "export") {
+        if (argc < 4) {
+            std::cerr << "Usage: export <in_file> <out.json>\n";
+            return 1;
+        }
+        std::string inPath = argv[2];
+        std::string outPath = argv[3];
+        std::vector<Session> sessions = loadSessionsFromCSV(inPath);
+        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions, true);
+        std::vector<Session> resolved = sessions;
+        ResolveResult res = Resolver::resolve(resolved, clashes);
+        if (JsonExport::write(outPath, inPath, sessions, clashes, resolved, res)) {
+            std::cout << "Successfully exported timetable report to " << outPath << "\n";
+            return 0;
+        } else {
+            std::cerr << "Failed to write export to " << outPath << "\n";
+            return 1;
+        }
     }
 
     if (mode == "apply") {
@@ -293,12 +343,12 @@ int main(int argc, char* argv[]) {
 
     if (mode == "summary") {
         if (argc < 3) {
-            std::cerr << "Error: summary requires CSV file path\n";
+            std::cerr << "Error: summary requires file path\n";
             return 1;
         }
         std::string csvPath = argv[2];
         std::vector<Session> sessions = loadSessionsFromCSV(csvPath);
-        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions);
+        std::vector<Clash> clashes = ClashDetector::detectClashes(sessions, true);
         ReportFormatter::summary(sessions, clashes);
         return 0;
     }

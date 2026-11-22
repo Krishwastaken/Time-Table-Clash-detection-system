@@ -228,9 +228,93 @@ function applyProposalToDraft(proposal, { adminId, adminName } = {}) {
   return { ok: true, proposalId, targetSessionId: targetSession.id };
 }
 
+function resolveAllClashes({ adminId, adminName, applyToDraft = false } = {}) {
+  ensureBinary();
+  const tmpCSV = dumpDraftSessionsToCSV();
+  const tmpOut = path.join(os.tmpdir(), `timetable_resolved_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.csv`);
+
+  try {
+    const args = ['resolve', tmpCSV, '--json'];
+    if (applyToDraft) {
+      args.push('--out', tmpOut);
+    }
+
+    const res = spawnSync(config.ENGINE_BIN, args, {
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024
+    });
+
+    if (res.status !== 0) {
+      throw new Error(`C++ Batch Resolver failed: ${res.stderr || res.stdout}`);
+    }
+
+    const batchResult = JSON.parse(res.stdout);
+
+    if (applyToDraft && fs.existsSync(tmpOut)) {
+      const { parseCSV, normalizeHeader } = require('../utils/csv_parser');
+      const csvContent = fs.readFileSync(tmpOut, 'utf8');
+      const rows = parseCSV(csvContent);
+      if (rows.length > 1) {
+        const headers = rows[0].map(normalizeHeader);
+        const secIdx = headers.indexOf('section');
+        const dayIdx = headers.indexOf('day');
+        const startIdx = headers.indexOf('start_time') !== -1 ? headers.indexOf('start_time') : headers.indexOf('starttime');
+        const endIdx = headers.indexOf('end_time') !== -1 ? headers.indexOf('end_time') : headers.indexOf('endtime');
+        const subIdx = headers.indexOf('subject');
+        const facIdx = headers.indexOf('faculty');
+        const roomIdx = headers.indexOf('room');
+        const countIdx = headers.indexOf('student_count') !== -1 ? headers.indexOf('student_count') : headers.indexOf('studentcount');
+
+        db.run('DELETE FROM timetable_sessions WHERE is_draft = 1');
+        const insertStmt = db.db.prepare(
+          `INSERT INTO timetable_sessions (id, version_id, section, day, start_time, end_time, subject, faculty, room, student_count, is_draft)
+           VALUES (?, 'DRAFT-CURRENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+        );
+
+        for (let i = 1; i < rows.length; i++) {
+          const r = rows[i];
+          const sec = String(r[secIdx] || '').trim();
+          const day = String(r[dayIdx] || '').trim();
+          const start = String(r[startIdx] || '').trim();
+          const end = String(r[endIdx] || '').trim();
+          const sub = String(r[subIdx] || '').trim();
+          const fac = facIdx !== -1 ? String(r[facIdx] || '').trim() : 'UNKNOWN';
+          const room = roomIdx !== -1 ? String(r[roomIdx] || '').trim() : 'UNKNOWN';
+          const count = countIdx !== -1 && parseInt(r[countIdx], 10) ? parseInt(r[countIdx], 10) : 60;
+          if (sec && day && start && end && sub) {
+            insertStmt.run(`SESS-RES-${Date.now()}-${i}`, sec, day, start, end, sub, fac, room, count);
+          }
+        }
+      }
+    }
+
+    if (adminId) {
+      auditService.logAction({
+        adminId,
+        adminName,
+        action: applyToDraft ? 'BATCH_RESOLVE_APPLIED_TO_DRAFT' : 'BATCH_RESOLVE_CLASHES',
+        entityType: 'clash_runs',
+        details: {
+          clashesBefore: batchResult.clashesBefore,
+          clashesAfter: batchResult.clashesAfter,
+          appliedCount: batchResult.appliedCount,
+          unresolvedCount: batchResult.unresolvedCount,
+          appliedToDraft: !!applyToDraft
+        }
+      });
+    }
+
+    return { ok: true, result: batchResult };
+  } finally {
+    try { fs.unlinkSync(tmpCSV); } catch (e) { /* ignore */ }
+    try { if (fs.existsSync(tmpOut)) fs.unlinkSync(tmpOut); } catch (e) { /* ignore */ }
+  }
+}
+
 module.exports = {
   runClashDetection,
   getLatestClashRun,
   proposeResolutionForClash,
-  applyProposalToDraft
+  applyProposalToDraft,
+  resolveAllClashes
 };

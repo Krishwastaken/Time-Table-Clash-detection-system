@@ -371,8 +371,12 @@
         [{ label: "Admin Portal", href: "#/dashboard" }, { label: "Clash Detection" }],
         "Clash Detection & Resolution Engine",
         "Direct integration with the university C++ detection engine and conflict resolution resolver.",
+        '<div style="display:flex; gap:10px;">' +
+        '<button type="button" class="btn btn-secondary" id="btn-batch-resolve" style="background:#2563eb; color:#fff; border-color:#1d4ed8;">' +
+        I.svg("check", 16) + ' AUTO-RESOLVE ALL</button>' +
         '<button type="button" class="btn btn-primary" id="btn-exec-clash-detection" style="background:#dc2626; border-color:#b91c1c;">' +
-        I.svg("play", 16) + ' RUN CLASH DETECTION</button>'
+        I.svg("play", 16) + ' RUN CLASH DETECTION</button>' +
+        '</div>'
       ) +
       '<div class="banner" style="background:#fef2f2; border-left-color:#ef4444;">' +
       I.svg("alert", 20) +
@@ -421,12 +425,12 @@
       "</div>" +
       '<div id="tab-imp-timetable" class="tab-content">' +
       '<div class="card" style="margin-bottom:20px;">' +
-      "<h3>Upload Timetable CSV</h3>" +
-      '<p class="muted">Expected format: <code>Section, Day, Start_Time, End_Time, Subject, Faculty, Room, Student_Count</code>. The system validates faculty references against the Faculty Master list.</p>' +
+      "<h3>Upload Timetable (CSV or HTML Timetable Grid)</h3>" +
+      '<p class="muted">Supports official university HTML timetables (e.g. <code>3sem.html</code>, <code>5sem.html</code>) or CSV format (<code>Section, Day, Start_Time, End_Time, Subject, Faculty, Room, Student_Count</code>). The native C++ engine automatically extracts all section sessions.</p>' +
       '<div class="dropzone" id="tt-dropzone">' +
       I.svg("upload", 32) +
-      '<p style="margin:8px 0 4px 0; font-weight:600;">Select or drop sessions.csv file</p>' +
-      '<input type="file" id="tt-file-input" accept=".csv" style="display:none;">' +
+      '<p style="margin:8px 0 4px 0; font-weight:600;">Select or drop sessions.csv, 3sem.html or 5sem.html</p>' +
+      '<input type="file" id="tt-file-input" accept=".csv,.html,.htm" style="display:none;">' +
       '<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'tt-file-input\').click()">Browse file</button>' +
       "</div>" +
       '<div id="tt-import-preview-box" hidden style="margin-top:16px;"></div>' +

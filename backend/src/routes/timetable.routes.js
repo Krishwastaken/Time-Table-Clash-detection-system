@@ -1,4 +1,10 @@
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const db = require('../db');
+const config = require('../config');
 const { requireAuth, sendJSON, sendError } = require('../middleware');
 const auditService = require('../services/audit.service');
 const { parseCSV, normalizeHeader, toCSVString } = require('../utils/csv_parser');
@@ -162,42 +168,116 @@ function handleTimetableRoutes(req, res, url, body) {
     return sendJSON(res, { ok: true, message: 'Session deleted from draft.' });
   }
 
-  // 5. POST /api/timetable/import: Import sessions CSV with preview and faculty mapping verification
+  // 5. POST /api/timetable/import: Import sessions CSV or HTML timetable with preview and faculty mapping verification
   if (url.pathname === '/api/timetable/import' && req.method === 'POST') {
     const session = requireAuth(req, res);
     if (!session) return true;
 
-    const { csvContent, commit, replaceDraft } = body;
-    if (!csvContent) {
-      return sendError(res, 'No CSV content provided.');
+    const rawContent = (body.csvContent || body.content || body.htmlContent || '').trim();
+    if (!rawContent) {
+      return sendError(res, 'No CSV or HTML content provided.');
     }
 
-    const rows = parseCSV(csvContent);
-    if (rows.length < 2) {
-      return sendError(res, 'CSV is empty or contains no records.');
-    }
-
-    const headers = rows[0].map(normalizeHeader);
-    const secIdx = headers.indexOf('section');
-    const dayIdx = headers.indexOf('day');
-    const startIdx = headers.indexOf('starttime');
-    const endIdx = headers.indexOf('endtime');
-    const subIdx = headers.indexOf('subject');
-    const facIdx = headers.indexOf('faculty');
-    const roomIdx = headers.indexOf('room');
-    const countIdx = headers.indexOf('studentcount') !== -1 ? headers.indexOf('studentcount') : headers.indexOf('students');
-
-    if (secIdx === -1 || dayIdx === -1 || startIdx === -1 || endIdx === -1 || subIdx === -1) {
-      return sendError(res, 'CSV missing required headers: Section, Day, Start_Time, End_Time, and Subject are required.');
-    }
+    const isHTML = /<html|<table|<!doctype/i.test(rawContent.slice(0, 1000));
+    const { commit, replaceDraft, includeFreePeriods } = body;
 
     // Load existing faculty master list for mapping validation
     const facultyMaster = db.all('SELECT faculty_id, faculty_name FROM faculty');
     const knownFacultyNames = new Set(facultyMaster.map(f => f.faculty_name.toLowerCase().trim()));
 
+    let parsedSessions = [];
+    let errors = [];
+
+    if (isHTML) {
+      // Process HTML timetable via engine_cli export
+      const tmpHtml = path.join(os.tmpdir(), `timetable_upload_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.html`);
+      const tmpJson = path.join(os.tmpdir(), `timetable_export_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.json`);
+      try {
+        fs.writeFileSync(tmpHtml, rawContent, 'utf8');
+        const resExp = spawnSync(config.ENGINE_BIN, ['export', tmpHtml, tmpJson], {
+          encoding: 'utf8',
+          maxBuffer: 32 * 1024 * 1024
+        });
+        if (resExp.status !== 0 || !fs.existsSync(tmpJson)) {
+          return sendError(res, `Failed to parse HTML timetable: ${resExp.stderr || resExp.stdout}`);
+        }
+        const exportedData = JSON.parse(fs.readFileSync(tmpJson, 'utf8'));
+        const rawSessions = (exportedData && exportedData.original && exportedData.original.sessions) || [];
+        for (const s of rawSessions) {
+          if (!includeFreePeriods && s.freePeriod) {
+            continue; // skip lunch/library/swayam by default
+          }
+          parsedSessions.push({
+            section: s.section || 'UNKNOWN',
+            day: s.day || '',
+            startTime: s.start || '',
+            endTime: s.end || '',
+            subject: s.subject || '',
+            faculty: s.faculty || 'UNKNOWN',
+            room: s.room || 'UNKNOWN',
+            studentCount: s.students || 60
+          });
+        }
+      } catch (err) {
+        return sendError(res, `HTML parsing failed: ${err.message}`, 500);
+      } finally {
+        try { if (fs.existsSync(tmpHtml)) fs.unlinkSync(tmpHtml); } catch (e) {}
+        try { if (fs.existsSync(tmpJson)) fs.unlinkSync(tmpJson); } catch (e) {}
+      }
+    } else {
+      // Process CSV timetable
+      const rows = parseCSV(rawContent);
+      if (rows.length < 2) {
+        return sendError(res, 'CSV is empty or contains no records.');
+      }
+      const headers = rows[0].map(normalizeHeader);
+      const secIdx = headers.indexOf('section');
+      const dayIdx = headers.indexOf('day');
+      const startIdx = headers.indexOf('start_time') !== -1 ? headers.indexOf('start_time') : headers.indexOf('starttime');
+      const endIdx = headers.indexOf('end_time') !== -1 ? headers.indexOf('end_time') : headers.indexOf('endtime');
+      const subIdx = headers.indexOf('subject');
+      const facIdx = headers.indexOf('faculty');
+      const roomIdx = headers.indexOf('room');
+      const countIdx = headers.indexOf('student_count') !== -1 ? headers.indexOf('student_count') : (headers.indexOf('studentcount') !== -1 ? headers.indexOf('studentcount') : headers.indexOf('students'));
+
+      if (secIdx === -1 || dayIdx === -1 || startIdx === -1 || endIdx === -1 || subIdx === -1) {
+        return sendError(res, 'CSV missing required headers: Section, Day, Start_Time, End_Time, and Subject are required.');
+      }
+
+      for (let i = 1; i < rows.length; i++) {
+        const r = rows[i];
+        const sec = String(r[secIdx] || '').trim();
+        const day = String(r[dayIdx] || '').trim();
+        const start = String(r[startIdx] || '').trim();
+        const end = String(r[endIdx] || '').trim();
+        const sub = String(r[subIdx] || '').trim();
+        const fac = facIdx !== -1 ? String(r[facIdx] || '').trim() : 'UNKNOWN';
+        const room = roomIdx !== -1 ? String(r[roomIdx] || '').trim() : 'UNKNOWN';
+        let count = 60;
+        if (countIdx !== -1 && r[countIdx]) {
+          const parsedCount = parseInt(r[countIdx], 10);
+          if (!isNaN(parsedCount) && parsedCount > 0) count = parsedCount;
+        }
+
+        if (!sec || !day || !start || !end || !sub) {
+          errors.push({ row: i + 1, error: 'Missing mandatory session fields.' });
+          continue;
+        }
+
+        parsedSessions.push({
+          section: sec,
+          day,
+          startTime: start,
+          endTime: end,
+          subject: sub,
+          faculty: fac,
+          room,
+          studentCount: count
+        });
+      }
+    }
+
     let validCount = 0;
-    let malformedCount = 0;
-    const errors = [];
     const previewRecords = [];
     const unmappedFaculty = new Set();
     const mappedFaculty = new Set();
@@ -206,29 +286,14 @@ function handleTimetableRoutes(req, res, url, body) {
       db.run('DELETE FROM timetable_sessions WHERE is_draft = 1');
     }
 
-    for (let i = 1; i < rows.length; i++) {
-      const r = rows[i];
-      const sec = String(r[secIdx] || '').trim();
-      const day = String(r[dayIdx] || '').trim();
-      const start = String(r[startIdx] || '').trim();
-      const end = String(r[endIdx] || '').trim();
-      const sub = String(r[subIdx] || '').trim();
-      const fac = facIdx !== -1 ? String(r[facIdx] || '').trim() : 'UNKNOWN';
-      const room = roomIdx !== -1 ? String(r[roomIdx] || '').trim() : 'UNKNOWN';
-      let count = 60;
-      if (countIdx !== -1 && r[countIdx]) {
-        const parsedCount = parseInt(r[countIdx], 10);
-        if (!isNaN(parsedCount) && parsedCount > 0) count = parsedCount;
-      }
+    const insertStmt = commit ? db.db.prepare(
+      `INSERT INTO timetable_sessions (id, version_id, section, day, start_time, end_time, subject, faculty, room, student_count, is_draft)
+       VALUES (?, 'DRAFT-CURRENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)`
+    ) : null;
 
-      if (!sec || !day || !start || !end || !sub) {
-        errors.push({ row: i + 1, error: 'Missing mandatory session fields.' });
-        malformedCount++;
-        continue;
-      }
-
-      // Check faculty mapping
-      const professors = fac.split(/&|\/|,/).map(p => p.trim()).filter(p => p.length > 0 && p !== 'UNKNOWN');
+    for (let i = 0; i < parsedSessions.length; i++) {
+      const s = parsedSessions[i];
+      const professors = s.faculty.split(/&|\/|,/).map(p => p.trim()).filter(p => p.length > 0 && p !== 'UNKNOWN');
       let isMapped = false;
       for (const p of professors) {
         const pLower = p.toLowerCase();
@@ -249,28 +314,24 @@ function handleTimetableRoutes(req, res, url, body) {
 
       validCount++;
 
-      if (i <= 15) {
+      if (i < 15) {
         previewRecords.push({
           row: i + 1,
-          section: sec,
-          day,
-          startTime: start,
-          endTime: end,
-          subject: sub,
-          faculty: fac,
-          room,
-          studentCount: count,
+          section: s.section,
+          day: s.day,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          subject: s.subject,
+          faculty: s.faculty,
+          room: s.room,
+          studentCount: s.studentCount,
           facultyMapped: isMapped
         });
       }
 
-      if (commit) {
-        const sessId = `SESS-IMP-${Date.now()}-${i}`;
-        db.run(
-          `INSERT INTO timetable_sessions (id, version_id, section, day, start_time, end_time, subject, faculty, room, student_count, is_draft)
-           VALUES (?, 'DRAFT-CURRENT', ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-          [sessId, sec, day, start, end, sub, fac, room, count]
-        );
+      if (commit && insertStmt) {
+        const sessId = `SESS-IMP-${Date.now()}-${i + 1}`;
+        insertStmt.run(sessId, s.section, s.day, s.startTime, s.endTime, s.subject, s.faculty, s.room, s.studentCount);
       }
     }
 
@@ -278,19 +339,20 @@ function handleTimetableRoutes(req, res, url, body) {
       auditService.logAction({
         adminId: session.adminId,
         adminName: session.name,
-        action: 'TIMETABLE_CSV_IMPORTED',
+        action: isHTML ? 'TIMETABLE_HTML_IMPORTED' : 'TIMETABLE_CSV_IMPORTED',
         entityType: 'timetable_sessions',
-        details: { validCount, malformedCount, unmappedFacultyCount: unmappedFaculty.size }
+        details: { validCount, format: isHTML ? 'HTML' : 'CSV', unmappedFacultyCount: unmappedFaculty.size }
       });
     }
 
     return sendJSON(res, {
       ok: true,
       committed: !!commit,
+      format: isHTML ? 'HTML' : 'CSV',
       summary: {
-        totalRows: rows.length - 1,
+        totalRows: parsedSessions.length + errors.length,
         validSessions: validCount,
-        malformedSessions: malformedCount,
+        malformedSessions: errors.length,
         unmappedFacultyList: Array.from(unmappedFaculty).slice(0, 20),
         mappedFacultyCount: mappedFaculty.size,
         errors

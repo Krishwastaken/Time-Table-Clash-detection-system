@@ -1,7 +1,8 @@
-
 #ifndef CLASH_DETECTOR_H
 #define CLASH_DETECTOR_H
 
+#include <cstddef>
+#include <map>
 #include <string>
 #include <vector>
 #include "Session.h"
@@ -24,13 +25,27 @@ struct Clash {
     std::size_t secondSession;
 
     std::string description;
+
+    WeekRule scenario = WeekRule::Always;
 };
 
 class ClashDetector {
 public:
-    // Returns all detected clashes. Does not modify the input vector.
+    using RoomPools = std::map<std::string, int>;
+
+    // The pools used by default (the 4-lab Logic Design lab block).
+    static RoomPools defaultRoomPools();
+
+
     static std::vector<Clash> detectClashes(
-        const std::vector<Session>& sessions
+        const std::vector<Session>& sessions,
+        bool ignorePresidentClass = false
+    );
+
+    static std::vector<Clash> detectClashes(
+        const std::vector<Session>& sessions,
+        bool ignorePresidentClass,
+        const RoomPools& roomPools
     );
 
     // Prints a human-readable clash report.

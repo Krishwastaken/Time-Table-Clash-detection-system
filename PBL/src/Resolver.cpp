@@ -1,387 +1,691 @@
 #include "Resolver.h"
+#include "TimeUtils.h"
+
 #include <algorithm>
-#include <cctype>
-#include <sstream>
+#include <fstream>
+#include <iomanip>
+#include <map>
+#include <ostream>
 #include <set>
+#include <utility>
+
+using namespace std;
+using namespace TimeUtils;
 
 namespace {
 
-std::string normalizeStr(const std::string& value) {
-    auto first = std::find_if_not(value.begin(), value.end(), [](unsigned char c) { return std::isspace(c); });
-    auto last = std::find_if_not(value.rbegin(), value.rend(), [](unsigned char c) { return std::isspace(c); }).base();
-    if (first >= last) return "";
-    std::string result(first, last);
-    std::transform(result.begin(), result.end(), result.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    return result;
-}
+const size_t NONE = static_cast<size_t>(-1);
 
-int toMins(const std::string& time) {
-    std::string v = normalizeStr(time);
-    if (v.size() != 5 || v[2] != ':') return -1;
-    if (!std::isdigit(v[0]) || !std::isdigit(v[1]) || !std::isdigit(v[3]) || !std::isdigit(v[4])) return -1;
-    return std::stoi(v.substr(0, 2)) * 60 + std::stoi(v.substr(3, 2));
-}
-
-bool intervalsOverlap(int aStart, int aEnd, int bStart, int bEnd) {
-    return aStart < bEnd && bStart < aEnd;
-}
-
-int roomCap(const std::string& room) {
-    std::string r = normalizeStr(room);
-    if (r.rfind("CR", 0) == 0) return 100;
-    if (r.rfind("LT", 0) == 0) return 200;
-    if (r.find("AUDI") != std::string::npos) return 500;
-    if (r.find("LAB") != std::string::npos) return 45;
-    return 100;
-}
-
-const std::vector<std::string> CANDIDATE_ROOMS = {
-    "LT-1", "LT-2", "LT-5", "LT-6", "LT-7", "LT-9", "LT-13", "LT-14", "LT-15",
-    "CR-2", "CR-3", "CR-4", "CR-5", "CR-6", "CR-7", "CR-8", "CR-12", "CR-17",
-    "Digital Lab-1", "Digital Lab-2", "Lab-1", "Lab-2", "Lab-5", "Lab-6", "Lab-7",
-    "New Lab-1", "New Lab-2", "GEHU-Audi (5th Floor)"
+// Pre-computed facts about one session, so the search never re-parses strings.
+struct Info {
+    int day = 7, start = -1, end = -1, students = 0, priority = 0;
+    WeekRule rule = WeekRule::Always;
+    string subject;                 // upper case, with the "(G1)" tag
+    string baseSubject;             // upper case, without the group tag
+    vector<string> rooms;           // normalised physical rooms
+    bool free = false, valid = false, lab = false;
 };
 
-struct TimeSlot {
-    std::string start;
-    std::string end;
-};
-
-const std::vector<TimeSlot> CANDIDATE_SLOTS = {
-    {"08:00", "08:55"},
-    {"09:00", "09:55"},
-    {"09:55", "10:50"},
-    {"11:10", "12:05"},
-    {"12:05", "13:00"},
-    {"13:55", "14:50"},
-    {"15:10", "16:05"},
-    {"16:05", "17:00"},
-    {"17:00", "17:55"}
-};
-
-const std::vector<std::string> WEEKDAYS = {
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
-};
-
-bool isRoomOccupied(const std::string& room, const std::string& day, int startMin, int endMin,
-                    const std::vector<Session>& sessions, size_t ignoreIdx) {
-    std::string normR = normalizeStr(room);
-    std::string normD = normalizeStr(day);
-    for (size_t i = 0; i < sessions.size(); ++i) {
-        if (i == ignoreIdx) continue;
-        const auto& s = sessions[i];
-        if (normalizeStr(s.getDay()) != normD) continue;
-        if (normalizeStr(s.getRoom()) != normR) continue;
-        int sStart = toMins(s.getStartTime());
-        int sEnd = toMins(s.getEndTime());
-        if (sStart >= 0 && sEnd >= 0 && intervalsOverlap(startMin, endMin, sStart, sEnd)) {
-            return true;
-        }
-    }
-    return false;
+// Who yields first when two sessions fight over a room (lower = moved first):
+// electives, then labs, then core subjects; a "Dr." is kept in place a little
+// more firmly than other staff (senior faculty are a preference, not a clash).
+int priorityOf(const Session& s, const string& subject) {
+    int p = 2;
+    if (subject.find("ELECTIVE") != string::npos) p = 0;
+    else if (subject.find("LAB") != string::npos) p = 1;
+    if (normalize(s.getFaculty()).rfind("DR", 0) == 0) p += 3;
+    return p;
 }
 
-bool isFacultyOccupied(const std::string& faculty, const std::string& day, int startMin, int endMin,
-                       const std::vector<Session>& sessions, size_t ignoreIdx) {
-    std::string normF = normalizeStr(faculty);
-    if (normF.empty()) return false;
-    std::string normD = normalizeStr(day);
-    for (size_t i = 0; i < sessions.size(); ++i) {
-        if (i == ignoreIdx) continue;
-        const auto& s = sessions[i];
-        if (normalizeStr(s.getDay()) != normD) continue;
-        if (normalizeStr(s.getFaculty()) != normF) continue;
-        int sStart = toMins(s.getStartTime());
-        int sEnd = toMins(s.getEndTime());
-        if (sStart >= 0 && sEnd >= 0 && intervalsOverlap(startMin, endMin, sStart, sEnd)) {
-            return true;
-        }
+Info makeInfo(const Session& s) {
+    Info x;
+    x.day = s.getDayIndex();
+    x.start = toMinutes(s.getStartTime());
+    x.end = toMinutes(s.getEndTime());
+    x.students = s.getStudentCount();
+    x.rule = effectiveRule(s);
+    x.subject = normalize(s.getSubject());
+    x.baseSubject = x.subject;
+    const string group = extractGroup(x.subject);
+    if (!group.empty()) {
+        const size_t pos = x.baseSubject.find("(" + group + ")");
+        if (pos != string::npos)
+            x.baseSubject = normalize(x.baseSubject.erase(pos, group.size() + 2));
     }
-    return false;
+    x.rooms = roomNames(s.getRoom());
+    x.free = isFreeActivity(x.subject);
+    x.valid = validInterval(s);
+    x.lab = x.subject.find("LAB") != string::npos || normalizeRoom(s.getRoom()).find("LAB") != string::npos;
+    x.priority = priorityOf(s, x.subject);
+    return x;
 }
 
-bool isSectionOccupied(const std::string& section, const std::string& day, int startMin, int endMin,
-                       const std::vector<Session>& sessions, size_t ignoreIdx) {
-    std::string normSec = normalizeStr(section);
-    if (normSec.empty()) return false;
-    std::string normD = normalizeStr(day);
-    for (size_t i = 0; i < sessions.size(); ++i) {
-        if (i == ignoreIdx) continue;
-        const auto& s = sessions[i];
-        if (normalizeStr(s.getDay()) != normD) continue;
-        if (normalizeStr(s.getSection()) != normSec) continue;
-        int sStart = toMins(s.getStartTime());
-        int sEnd = toMins(s.getEndTime());
-        if (sStart >= 0 && sEnd >= 0 && intervalsOverlap(startMin, endMin, sStart, sEnd)) {
-            return true;
-        }
-    }
-    return false;
+bool timesOverlap(const Info& a, const Info& b) {
+    return a.day == b.day && a.start < b.end && b.start < a.end;
 }
 
-} // namespace
+string placeText(const Session& s) {
+    return s.getDay() + " " + s.getStartTime() + "-" + s.getEndTime() + " (" + s.getRoom() + ")";
+}
 
-ResolutionProposal Resolver::proposeResolution(
-    size_t clashIndex,
-    const std::vector<Clash>& clashes,
-    const std::vector<Session>& sessions
-) {
-    ResolutionProposal proposal;
-    if (clashIndex >= clashes.size()) {
-        proposal.explanation = "Invalid clash index.";
-        proposal.feasible = false;
-        return proposal;
+string csvField(const string& s) {
+    if (s.find_first_of(",\"\r\n") == string::npos)
+        return s;
+
+    string result = "\"";
+    for (char c : s) {
+        if (c == '"') result += '"';
+        result += c;
     }
+    return result + "\"";
+}
 
-    const Clash& clash = clashes[clashIndex];
-    proposal.clashIndex = clashIndex;
-    proposal.clashType = clash.type;
+const char* ruleCode(WeekRule r) {
+    return r == WeekRule::SaturdayOffOnly ? "SAT_OFF"
+         : r == WeekRule::SaturdayWorkingOnly ? "SAT_WORK" : "ALWAYS";
+}
 
-    if (clash.firstSession >= sessions.size()) {
-        proposal.explanation = "Referenced session index out of bounds.";
-        proposal.feasible = false;
-        return proposal;
+string why(const Clash& c) {
+    switch (c.type) {
+        case ClashType::Faculty:
+            return "The same teacher is in two places at once. Fixing it needs a different "
+                   "time or teacher, and the timetable is fixed.";
+        case ClashType::Section:
+            return "The section has two classes at the same time. Fixing it needs a "
+                   "different time, and the timetable is fixed.";
+        case ClashType::Room:
+            return "No other suitable room is free: a replacement must be the same kind of "
+                   "room, big enough, and free in the same weeks.";
+        case ClashType::RoomCapacity:
+            return "No bigger suitable room is free at this time.";
+        case ClashType::DuplicateSession:
+            return "Duplicate row.";
     }
+    return "";
+}
 
-    // 1. DUPLICATE SESSION
-    if (clash.type == ClashType::DuplicateSession) {
-        size_t targetIdx = (clash.secondSession != static_cast<size_t>(-1) && clash.secondSession < sessions.size())
-                           ? clash.secondSession : clash.firstSession;
-        proposal.targetSessionIndex = targetIdx;
-        proposal.originalSession = sessions[targetIdx];
-        proposal.proposedSession = sessions[targetIdx];
-        proposal.action = "REMOVE_DUPLICATE";
-        proposal.explanation = "Remove redundant duplicate session record from timetable.";
-        proposal.feasible = true;
-        return proposal;
-    }
+// Holds the timetable state while rooms are being re-assigned.
+class RoomPlanner {
+public:
+    RoomPlanner(const vector<Session>& sessions, const vector<char>& removed,
+                const ClashDetector::RoomPools& pools)
+        : sessions_(sessions), removed_(removed), pools_(pools) {
+        info_.resize(sessions.size());
 
-    // 2. ROOM CAPACITY CLASH
-    if (clash.type == ClashType::RoomCapacity) {
-        size_t targetIdx = clash.firstSession;
-        const Session& target = sessions[targetIdx];
-        proposal.targetSessionIndex = targetIdx;
-        proposal.originalSession = target;
-        proposal.proposedSession = target;
+        for (size_t i = 0; i < sessions.size(); ++i) {
+            info_[i] = makeInfo(sessions[i]);
+            if (removed_[i] || info_[i].free || !info_[i].valid)
+                continue;
 
-        int reqStudents = target.getStudentCount();
-        int curCap = roomCap(target.getRoom());
-        int startMin = toMins(target.getStartTime());
-        int endMin = toMins(target.getEndTime());
-
-        // Find candidate room that has enough capacity and is free at that time
-        std::string foundRoom;
-        int bestCap = 99999;
-        for (const auto& r : CANDIDATE_ROOMS) {
-            int c = roomCap(r);
-            if (c >= reqStudents && c < bestCap) {
-                if (!isRoomOccupied(r, target.getDay(), startMin, endMin, sessions, targetIdx)) {
-                    foundRoom = r;
-                    bestCap = c;
-                }
+            const vector<string> display = displayNames(sessions[i].getRoom());
+            for (size_t k = 0; k < info_[i].rooms.size(); ++k) {
+                const string& room = info_[i].rooms[k];
+                inRoom_[room].push_back(i);
+                display_.emplace(room, display.size() > k ? display[k] : room);
+                if (info_[i].lab)
+                    labHosts_[info_[i].baseSubject].insert(room);
             }
         }
+    }
 
-        if (!foundRoom.empty()) {
-            proposal.action = "CHANGE_ROOM";
-            proposal.proposedSession.setRoom(foundRoom);
-            std::ostringstream ss;
-            ss << "Move session from " << target.getRoom() << " (capacity " << curCap
-               << ") to " << foundRoom << " (capacity " << bestCap
-               << ") to accommodate " << reqStudents << " students.";
-            proposal.explanation = ss.str();
-            proposal.feasible = true;
-        } else {
-            // If no room is free at that time, find alternate time slot with suitable room
-            for (const auto& slot : CANDIDATE_SLOTS) {
-                int sMin = toMins(slot.start);
-                int eMin = toMins(slot.end);
-                for (const auto& r : CANDIDATE_ROOMS) {
-                    if (roomCap(r) >= reqStudents &&
-                        !isRoomOccupied(r, target.getDay(), sMin, eMin, sessions, targetIdx) &&
-                        !isFacultyOccupied(target.getFaculty(), target.getDay(), sMin, eMin, sessions, targetIdx) &&
-                        !isSectionOccupied(target.getSection(), target.getDay(), sMin, eMin, sessions, targetIdx)) {
-                        proposal.action = "CHANGE_TIME_AND_ROOM";
-                        proposal.proposedSession.setRoom(r);
-                        proposal.proposedSession.setStartTime(slot.start);
-                        proposal.proposedSession.setEndTime(slot.end);
-                        std::ostringstream ss;
-                        ss << "Reschedule session to " << target.getDay() << " " << slot.start << "-" << slot.end
-                           << " in room " << r << " (capacity " << roomCap(r) << ").";
-                        proposal.explanation = ss.str();
-                        proposal.feasible = true;
-                        break;
-                    }
-                }
-                if (proposal.feasible) break;
+    const Info& info(size_t i) const { return info_[i]; }
+
+    // Does session i currently have a room problem?
+    bool hasRoomProblem(size_t i) const {
+        const Info& a = info_[i];
+        if (removed_[i] || a.free || !a.valid || a.rooms.empty())
+            return false;
+
+        const int cap = capacityOfRoomName(sessions_[i].getRoom());
+        if (cap > 0 && a.students > cap)
+            return true;
+
+        for (const string& room : a.rooms)
+            if (roomIsOverbooked(i, room))
+                return true;
+
+        return false;
+    }
+
+    // Sections that share one lecture (same subject, room, time and weeks).
+    // They must move together, otherwise the lecture splits and the teacher
+    // ends up in several rooms at once.
+    vector<size_t> sharedGroup(size_t i) const {
+        vector<size_t> members = { i };
+        const Info& a = info_[i];
+
+        if (a.lab || a.rooms.size() != 1)
+            return members;
+
+        auto it = inRoom_.find(a.rooms[0]);
+        if (it == inRoom_.end())
+            return members;
+
+        for (size_t j : it->second) {
+            const Info& b = info_[j];
+            if (j != i && !removed_[j] && b.day == a.day && b.start == a.start &&
+                b.end == a.end && b.rule == a.rule && b.subject == a.subject)
+                members.push_back(j);
+        }
+
+        return members;
+    }
+
+    // Can the sessions in `members` (together `students` people) move into
+    // `room` without creating a room problem?
+    bool canHost(const vector<size_t>& members, int students, const string& room) const {
+        const Info& a = info_[members[0]];
+        const int cap = capacityOfRoomName(room);
+
+        if (cap <= 0 || students > cap)
+            return false;
+
+        auto it = inRoom_.find(room);
+        if (it == inRoom_.end())
+            return true;
+
+        auto pool = pools_.find(room);
+        size_t overlapping = 0;
+
+        for (size_t j : it->second) {
+            if (removed_[j] || find(members.begin(), members.end(), j) != members.end() ||
+                !timesOverlap(a, info_[j]))
+                continue;
+
+            WeekRule both;
+            if (!combineRules(a.rule, info_[j].rule, both))
+                continue;               // never run in the same week
+
+            ++overlapping;
+        }
+
+        return pool == pools_.end() ? overlapping == 0
+                                    : overlapping < static_cast<size_t>(pool->second);
+    }
+
+    // Rooms the session could move to, best fit (smallest) first.
+    vector<string> candidates(size_t i) const {
+        const Info& a = info_[i];
+        vector<pair<int, string>> found;
+
+        const bool inAudi = !a.rooms.empty() && a.rooms[0].find("AUDI") != string::npos;
+
+        for (const auto& entry : inRoom_) {
+            const string& room = entry.first;
+
+            if (find(a.rooms.begin(), a.rooms.end(), room) != a.rooms.end())
+                continue;
+
+            const bool roomIsLab = isLabRoom(room);
+
+            if (a.lab != roomIsLab)
+                continue;                                   // lab <-> lab, lecture <-> lecture
+
+            if (a.lab) {
+                auto hosts = labHosts_.find(a.baseSubject);
+                if (hosts == labHosts_.end() || !hosts->second.count(room))
+                    continue;                               // only labs that already run this subject
+            } else if (!inAudi && room.find("AUDI") != string::npos) {
+                continue;                                   // keep the auditorium for its own lectures
             }
-            if (!proposal.feasible) {
-                proposal.explanation = "No free room with capacity >= " + std::to_string(reqStudents) + " was found.";
+
+            const int cap = capacityOfRoomName(room);
+            if (cap > 0)
+                found.push_back({cap, room});
+        }
+
+        sort(found.begin(), found.end());
+
+        vector<string> rooms;
+        for (const auto& f : found)
+            rooms.push_back(f.second);
+        return rooms;
+    }
+
+    void moveTo(size_t i, const string& room) {
+        for (const string& old : info_[i].rooms) {
+            auto& v = inRoom_[old];
+            v.erase(remove(v.begin(), v.end(), i), v.end());
+        }
+
+        info_[i].rooms = { room };
+        inRoom_[room].push_back(i);
+    }
+
+    string displayName(const string& room) const {
+        auto it = display_.find(room);
+        return it == display_.end() ? room : it->second;
+    }
+
+private:
+    // "Lab-7 & Lab-6" -> {"Lab-7", "Lab-6"} in the spelling used in the timetable.
+    static vector<string> displayNames(const string& raw) {
+        vector<string> names;
+        string token;
+        for (size_t i = 0; i <= raw.size(); ++i) {
+            if (i == raw.size() || raw[i] == '&') {
+                size_t a = token.find_first_not_of(" \t"), b = token.find_last_not_of(" \t");
+                if (a != string::npos) names.push_back(token.substr(a, b - a + 1));
+                token.clear();
+            } else {
+                token += raw[i];
             }
         }
-        return proposal;
+        return names;
     }
 
-    // Pairwise clashes: Faculty, Room, Section
-    size_t s1Idx = clash.firstSession;
-    size_t s2Idx = clash.secondSession;
-    if (s2Idx >= sessions.size()) {
-        s2Idx = s1Idx;
+    bool roomIsOverbooked(size_t i, const string& room) const {
+        const Info& a = info_[i];
+        auto it = inRoom_.find(room);
+        if (it == inRoom_.end())
+            return false;
+
+        auto pool = pools_.find(room);
+        size_t overlapping = 0;
+
+        for (size_t j : it->second) {
+            if (j == i || removed_[j] || !timesOverlap(a, info_[j]))
+                continue;
+
+            const Info& b = info_[j];
+            WeekRule both;
+            if (!combineRules(a.rule, b.rule, both))
+                continue;
+
+            // A lecture shared by several sections is one class, not a clash.
+            const bool shared = !a.lab && !b.lab && room != "UNKNOWN" &&
+                                a.start == b.start && a.end == b.end &&
+                                a.rule == b.rule && a.subject == b.subject;
+            if (shared)
+                continue;
+
+            ++overlapping;
+            if (pool == pools_.end())
+                return true;
+        }
+
+        return pool != pools_.end() && overlapping >= static_cast<size_t>(pool->second);
     }
-    // Target session is typically s2 (the overlapping peer)
-    size_t targetIdx = s2Idx;
-    const Session& target = sessions[targetIdx];
-    proposal.targetSessionIndex = targetIdx;
-    proposal.originalSession = target;
-    proposal.proposedSession = target;
 
-    // 3. ROOM CLASH
-    if (clash.type == ClashType::Room) {
-        int reqStudents = target.getStudentCount();
-        int startMin = toMins(target.getStartTime());
-        int endMin = toMins(target.getEndTime());
+    const vector<Session>& sessions_;
+    const vector<char>& removed_;
+    const ClashDetector::RoomPools& pools_;
+    vector<Info> info_;
+    map<string, vector<size_t>> inRoom_;
+    map<string, string> display_;
+    map<string, set<string>> labHosts_;
+};
 
-        // First attempt: keep time, change room to another unoccupied room
-        std::string foundRoom;
-        for (const auto& r : CANDIDATE_ROOMS) {
-            if (normalizeStr(r) == normalizeStr(target.getRoom())) continue;
-            if (roomCap(r) >= reqStudents &&
-                !isRoomOccupied(r, target.getDay(), startMin, endMin, sessions, targetIdx)) {
-                foundRoom = r;
+}  
+
+namespace Resolver {
+
+ResolveResult resolve(vector<Session>& sessions, const vector<Clash>& clashes, const Config& cfg) {
+    ResolveResult result;
+    result.clashesBefore = clashes.size();
+
+    const size_t n = sessions.size();
+    vector<char> removed(n, false);
+
+    // Step 1: exact duplicates are data-entry errors; the later copy is deleted.
+    for (const Clash& c : clashes) {
+        if (c.type != ClashType::DuplicateSession || c.firstSession >= n ||
+            c.secondSession >= n || removed[c.secondSession])
+            continue;
+
+        removed[c.secondSession] = true;
+        const Session& d = sessions[c.secondSession];
+
+        result.applied.push_back({
+            FixKind::RemoveDuplicate, c.secondSession,
+            d.getSubject(), d.getSection(), d.getFaculty(),
+            placeText(d), "",
+            "exact duplicate of session #" + to_string(c.firstSession + 1)
+        });
+    }
+
+    // Step 2: build the conflict graph. Vertices are sessions, an edge joins
+    // two sessions that fight over the same room at the same time. Sessions
+    // with a capacity problem are vertices without an edge.
+    RoomPlanner planner(sessions, removed, cfg.roomPools);
+    vector<size_t> degree(n, 0);
+    vector<char> needsRoom(n, false);
+
+    for (const Clash& c : clashes) {
+        if (c.type != ClashType::Room && c.type != ClashType::RoomCapacity)
+            continue;
+
+        for (size_t s : {c.firstSession, c.secondSession}) {
+            if (s < n && !removed[s]) {
+                needsRoom[s] = true;
+                if (c.type == ClashType::Room)
+                    ++degree[s];
+            }
+        }
+    }
+
+    // Step 3: greedy colouring. A "colour" is a room. Sessions are taken in
+    // order of who should yield first (priority), then by number of conflicts
+    // (Welsh-Powell: most constrained first). Each gets the first suitable
+    // room that is free in every week it runs. A session whose clash was
+    // already cured by a partner moving away is left alone.
+    vector<size_t> order;
+    for (size_t i = 0; i < n; ++i)
+        if (needsRoom[i])
+            order.push_back(i);
+
+    stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        if (planner.info(a).priority != planner.info(b).priority)
+            return planner.info(a).priority < planner.info(b).priority;
+        return degree[a] > degree[b];
+    });
+
+    for (size_t i : order) {
+        if (!planner.hasRoomProblem(i))
+            continue;
+
+        const vector<size_t> members = planner.sharedGroup(i);
+        int total = 0;
+
+        for (size_t m : members) {
+            total += sessions[m].getStudentCount();
+        }
+
+        // A shared lecture moves only to a room that fits every section;
+        // otherwise it stays and the clash is reported as unresolved.
+        string chosen;
+        for (const string& room : planner.candidates(i)) {
+            if (planner.canHost(members, total, room)) {
+                chosen = room;
                 break;
             }
         }
 
-        if (!foundRoom.empty()) {
-            proposal.action = "CHANGE_ROOM";
-            proposal.proposedSession.setRoom(foundRoom);
-            std::ostringstream ss;
-            ss << "Move conflicting session for section " << target.getSection()
-               << " (" << target.getSubject() << ") from " << target.getRoom()
-               << " to available room " << foundRoom << " at " << target.getStartTime() << "-" << target.getEndTime() << ".";
-            proposal.explanation = ss.str();
-            proposal.feasible = true;
-            return proposal;
-        }
+        if (chosen.empty())
+            continue;
 
-        // If no alternate room free at same time, find alternate time slot
-        for (const auto& slot : CANDIDATE_SLOTS) {
-            int sMin = toMins(slot.start);
-            int eMin = toMins(slot.end);
-            if (!isRoomOccupied(target.getRoom(), target.getDay(), sMin, eMin, sessions, targetIdx) &&
-                !isFacultyOccupied(target.getFaculty(), target.getDay(), sMin, eMin, sessions, targetIdx) &&
-                !isSectionOccupied(target.getSection(), target.getDay(), sMin, eMin, sessions, targetIdx)) {
-                proposal.action = "CHANGE_TIME";
-                proposal.proposedSession.setStartTime(slot.start);
-                proposal.proposedSession.setEndTime(slot.end);
-                std::ostringstream ss;
-                ss << "Reschedule session for section " << target.getSection()
-                   << " to " << target.getDay() << " " << slot.start << "-" << slot.end
-                   << " in room " << target.getRoom() << ".";
-                proposal.explanation = ss.str();
-                proposal.feasible = true;
-                return proposal;
-            }
-        }
+        const string newRoom = planner.displayName(chosen);
 
-        proposal.explanation = "No immediate conflict-free alternate room or time slot found for room clash.";
-        return proposal;
+        for (size_t m : members) {
+            const Session me = sessions[m];
+            const int cap = capacityOfRoomName(me.getRoom());
+            const bool tooSmall = cap > 0 && me.getStudentCount() > cap;
+
+            result.applied.push_back({
+                FixKind::ChangeRoom, m,
+                me.getSubject(), me.getSection(), me.getFaculty(),
+                placeText(me),
+                me.getDay() + " " + me.getStartTime() + "-" + me.getEndTime() + " (" + newRoom + ")",
+                members.size() > 1
+                    ? "shared lecture of " + to_string(members.size()) + " sections moved together"
+                    : (tooSmall ? "room too small for " + to_string(me.getStudentCount()) + " students"
+                                : "room double-booked")
+            });
+
+            sessions[m] = Session(me.getSubject(), me.getFaculty(), newRoom, me.getSection(),
+                                  me.getDay(), me.getStartTime(), me.getEndTime(),
+                                  me.getStudentCount(), me.getWeekRule());
+            planner.moveTo(m, chosen);
+        }
     }
 
-    // 4. FACULTY CLASH & 5. SECTION CLASH
-    if (clash.type == ClashType::Faculty || clash.type == ClashType::Section) {
-        int reqStudents = target.getStudentCount();
+    // Step 4: drop removed duplicates, then re-verify with the real detector.
+    vector<Session> kept;
+    kept.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        if (!removed[i]) {
+            kept.push_back(sessions[i]);
+            result.originalIndex.push_back(i);
+        }
+    }
+    sessions = std::move(kept);
 
-        // Search for alternate time slot on the same day first, then other weekdays
-        std::vector<std::string> searchDays = { target.getDay() };
-        for (const auto& d : WEEKDAYS) {
-            if (normalizeStr(d) != normalizeStr(target.getDay())) {
-                searchDays.push_back(d);
+    result.remaining = ClashDetector::detectClashes(sessions, cfg.ignorePresidentClass, cfg.roomPools);
+    result.clashesAfter = result.remaining.size();
+
+    for (const Clash& c : result.remaining) {
+        result.unresolved.push_back({
+            c.type, c.firstSession, c.secondSession, c.scenario, c.description, why(c)
+        });
+    }
+
+    return result;
+}
+
+void print(ostream& out, const ResolveResult& r) {
+    out << "\n==================== CLASH RESOLVER ====================\n";
+    out << "Conflict records before: " << r.clashesBefore
+        << " | after: " << r.clashesAfter << "\n";
+    out << "Class times are fixed: only rooms are changed.\n";
+
+    if (r.applied.empty())
+        out << "\nNo changes proposed.\n";
+
+    for (size_t i = 0; i < r.applied.size(); ++i) {
+        const auto& x = r.applied[i];
+
+        out << "\n[" << setw(3) << setfill('0') << i + 1 << setfill(' ') << "] "
+            << (x.kind == FixKind::ChangeRoom ? "ROOM" : "REMOVE")
+            << " | #" << x.sessionIndex + 1 << " " << x.subject
+            << " | " << x.section << " | " << x.faculty << "\n";
+        out << "  From : " << x.from << "\n";
+        if (!x.to.empty())
+            out << "  To   : " << x.to << "\n";
+        out << "  Why  : " << x.reason << "\n";
+    }
+
+    if (!r.unresolved.empty()) {
+        out << "\n---- Could not be resolved (" << r.unresolved.size() << ") ----\n";
+        size_t shown = 0;
+        for (const auto& u : r.unresolved) {
+            if (++shown > 15) {
+                out << "  ... and " << r.unresolved.size() - 15
+                    << " more (see unresolved_clashes.csv)\n";
+                break;
+            }
+            out << "  - " << u.description << "\n    " << u.reason << "\n";
+        }
+    }
+
+    out << "========================================================\n";
+}
+
+bool exportTimetable(const string& path, const vector<Session>& sessions) {
+    ofstream f(path);
+    if (!f)
+        return false;
+
+    f << "subject,faculty,room,section,day,startTime,endTime,studentCount,weekRule\n";
+
+    for (const auto& s : sessions) {
+        f << csvField(s.getSubject()) << ',' << csvField(s.getFaculty()) << ','
+          << csvField(s.getRoom()) << ',' << csvField(s.getSection()) << ','
+          << csvField(s.getDay()) << ',' << csvField(s.getStartTime()) << ','
+          << csvField(s.getEndTime()) << ',' << s.getStudentCount() << ','
+          << ruleCode(s.getWeekRule()) << '\n';
+    }
+
+    return static_cast<bool>(f);
+}
+
+bool exportChangeLog(const string& path, const ResolveResult& r) {
+    ofstream f(path);
+    if (!f)
+        return false;
+
+    f << "change,session,subject,section,faculty,from,to,reason\n";
+
+    for (const auto& x : r.applied) {
+        f << (x.kind == FixKind::ChangeRoom ? "ROOM CHANGED" : "REMOVED") << ','
+          << x.sessionIndex + 1 << ',' << csvField(x.subject) << ','
+          << csvField(x.section) << ',' << csvField(x.faculty) << ','
+          << csvField(x.from) << ',' << csvField(x.to) << ',' << csvField(x.reason) << '\n';
+    }
+
+    return static_cast<bool>(f);
+}
+
+bool exportUnresolved(const string& path, const ResolveResult& r, const vector<Session>& resolved) {
+    ofstream f(path);
+    if (!f)
+        return false;
+
+    f << "type,weeks,sessionA,sectionA,sessionB,sectionB,description,reason\n";
+
+    for (const auto& u : r.unresolved) {
+        const Session& a = resolved[u.first];
+        const bool two = u.second != NONE && u.second < resolved.size();
+
+        static const char* const typeNames[] = {"FACULTY", "ROOM", "SECTION", "CAPACITY", "DUPLICATE"};
+
+        f << typeNames[static_cast<int>(u.type)] << ',' << ruleCode(u.scenario) << ','
+          << csvField(a.getSubject() + " " + a.getDay() + " " + a.getStartTime()) << ','
+          << csvField(a.getSection()) << ','
+          << csvField(two ? resolved[u.second].getSubject() + " " + resolved[u.second].getDay() + " " + resolved[u.second].getStartTime() : "") << ','
+          << csvField(two ? resolved[u.second].getSection() : "") << ','
+          << csvField(u.description) << ',' << csvField(u.reason) << '\n';
+    }
+
+    return static_cast<bool>(f);
+}
+
+SingleClashProposal proposeSingleClash(int clashIndex,
+                                       const vector<Clash>& clashes,
+                                       const vector<Session>& sessions) {
+    SingleClashProposal prop;
+    prop.clashIndex = clashIndex;
+    prop.clashId = "CLASH-" + to_string(clashIndex + 1);
+    prop.clashesBefore = clashes.size();
+    prop.clashesAfter = clashes.size();
+
+    if (clashIndex < 0 || clashIndex >= static_cast<int>(clashes.size())) {
+        prop.feasible = false;
+        prop.explanation = "Invalid clash index.";
+        return prop;
+    }
+
+    const Clash& c = clashes[clashIndex];
+    size_t s1_idx = c.firstSession;
+    size_t s2_idx = c.secondSession;
+    const Session& s1 = sessions[s1_idx];
+
+    prop.targetSessionIndex = s1_idx;
+    prop.originalRoom = s1.getRoom();
+    prop.proposedRoom = s1.getRoom();
+    prop.originalDay = s1.getDay();
+    prop.proposedDay = s1.getDay();
+    prop.originalStartTime = s1.getStartTime();
+    prop.proposedStartTime = s1.getStartTime();
+    prop.originalEndTime = s1.getEndTime();
+    prop.proposedEndTime = s1.getEndTime();
+
+    // Run greedy resolver on a copy of sessions
+    vector<Session> copy = sessions;
+    Config cfg;
+    cfg.ignorePresidentClass = false;
+    ResolveResult res = resolve(copy, clashes, cfg);
+    prop.clashesAfter = res.clashesAfter;
+
+    // Check if target clash was resolved by applied changes
+    for (const auto& app : res.applied) {
+        if (app.sessionIndex == s1_idx || (s2_idx != static_cast<size_t>(-1) && app.sessionIndex == s2_idx)) {
+            prop.feasible = true;
+            prop.targetSessionIndex = app.sessionIndex;
+            const Session& target = sessions[app.sessionIndex];
+            prop.originalRoom = target.getRoom();
+            prop.originalDay = target.getDay();
+            prop.originalStartTime = target.getStartTime();
+            prop.originalEndTime = target.getEndTime();
+            prop.proposedDay = target.getDay();
+            prop.proposedStartTime = target.getStartTime();
+            prop.proposedEndTime = target.getEndTime();
+
+            if (app.kind == FixKind::RemoveDuplicate) {
+                prop.action = "REMOVE_DUPLICATE";
+                prop.explanation = app.reason;
+                return prop;
+            } else if (app.kind == FixKind::ChangeRoom) {
+                prop.action = "CHANGE_ROOM";
+                size_t p1 = app.to.find('(');
+                size_t p2 = app.to.rfind(')');
+                if (p1 != string::npos && p2 != string::npos && p2 > p1) {
+                    prop.proposedRoom = app.to.substr(p1 + 1, p2 - p1 - 1);
+                } else {
+                    prop.proposedRoom = app.to;
+                }
+                prop.explanation = app.reason;
+                return prop;
             }
         }
+    }
 
-        for (const auto& d : searchDays) {
-            for (const auto& slot : CANDIDATE_SLOTS) {
-                int sMin = toMins(slot.start);
-                int eMin = toMins(slot.end);
-                // Check if faculty and section are free
-                if (!isFacultyOccupied(target.getFaculty(), d, sMin, eMin, sessions, targetIdx) &&
-                    !isSectionOccupied(target.getSection(), d, sMin, eMin, sessions, targetIdx)) {
-                    
-                    // Check if current room or another suitable room is free
-                    std::string assignedRoom;
-                    if (!isRoomOccupied(target.getRoom(), d, sMin, eMin, sessions, targetIdx) &&
-                        roomCap(target.getRoom()) >= reqStudents) {
-                        assignedRoom = target.getRoom();
-                    } else {
-                        for (const auto& r : CANDIDATE_ROOMS) {
-                            if (roomCap(r) >= reqStudents && !isRoomOccupied(r, d, sMin, eMin, sessions, targetIdx)) {
-                                assignedRoom = r;
-                                break;
-                            }
-                        }
-                    }
+    // If room resolution alone couldn't fix it (e.g. overlapping faculty/section), try time slot shift
+    if (s2_idx != static_cast<size_t>(-1) && s2_idx < sessions.size()) {
+        const Session& s2 = sessions[s2_idx];
+        prop.targetSessionIndex = s2_idx;
+        prop.originalRoom = s2.getRoom();
+        prop.proposedRoom = s2.getRoom();
+        prop.originalDay = s2.getDay();
+        prop.proposedDay = s2.getDay();
+        prop.originalStartTime = s2.getStartTime();
+        prop.proposedEndTime = s2.getEndTime();
 
-                    if (!assignedRoom.empty()) {
-                        proposal.action = (assignedRoom == target.getRoom()) ? "CHANGE_TIME" : "CHANGE_TIME_AND_ROOM";
-                        proposal.proposedSession.setDay(d);
-                        proposal.proposedSession.setStartTime(slot.start);
-                        proposal.proposedSession.setEndTime(slot.end);
-                        proposal.proposedSession.setRoom(assignedRoom);
+        const vector<pair<string, string>> standardSlots = {
+            {"08:00", "08:55"}, {"09:00", "09:55"}, {"10:00", "10:55"},
+            {"11:10", "12:05"}, {"12:10", "13:05"}, {"13:55", "14:50"},
+            {"14:55", "15:50"}, {"16:05", "17:00"}, {"17:00", "17:55"}
+        };
 
-                        std::ostringstream ss;
-                        if (clash.type == ClashType::Faculty) {
-                            ss << "Reschedule session for section " << target.getSection()
-                               << " to " << d << " " << slot.start << "-" << slot.end
-                               << " in " << assignedRoom
-                               << " where faculty " << target.getFaculty() << " is available.";
-                        } else {
-                            ss << "Reschedule session for section " << target.getSection()
-                               << " to " << d << " " << slot.start << "-" << slot.end
-                               << " in " << assignedRoom
-                               << " to resolve section overlap.";
-                        }
-                        proposal.explanation = ss.str();
-                        proposal.feasible = true;
-                        return proposal;
+        for (const auto& slot : standardSlots) {
+            int slotStart = toMinutes(slot.first);
+            int slotEnd = toMinutes(slot.second);
+            bool free = true;
+
+            for (size_t i = 0; i < sessions.size(); ++i) {
+                if (i == s2_idx) continue;
+                const Session& other = sessions[i];
+                if (other.getDay() != s2.getDay()) continue;
+
+                int oStart = toMinutes(other.getStartTime());
+                int oEnd = toMinutes(other.getEndTime());
+                if (std::max(slotStart, oStart) < std::min(slotEnd, oEnd)) {
+                    if (other.getFaculty() == s2.getFaculty() ||
+                        other.getSection() == s2.getSection() ||
+                        other.getRoom() == s2.getRoom()) {
+                        free = false;
+                        break;
                     }
                 }
             }
-        }
 
-        proposal.explanation = "Unable to find an alternate conflict-free slot for faculty/section.";
-        return proposal;
+            if (free) {
+                prop.action = "CHANGE_TIME";
+                prop.feasible = true;
+                prop.proposedStartTime = slot.first;
+                prop.proposedEndTime = slot.second;
+                prop.explanation = "Reschedule session for section " + s2.getSection() +
+                                   " to " + s2.getDay() + " " + slot.first + "-" + slot.second +
+                                   " in " + s2.getRoom() + " where faculty is available.";
+                prop.clashesAfter = res.clashesBefore > 0 ? res.clashesBefore - 1 : 0;
+                return prop;
+            }
+        }
     }
 
-    proposal.explanation = "Unknown clash type resolution.";
-    return proposal;
+    prop.action = "UNRESOLVED";
+    prop.feasible = false;
+    prop.explanation = "Class times are fixed; no conflict-free room or slot available without manual adjustment.";
+    return prop;
 }
 
-std::vector<ResolutionProposal> Resolver::proposeAllResolutions(
-    const std::vector<Clash>& clashes,
-    const std::vector<Session>& sessions
-) {
-    std::vector<ResolutionProposal> proposals;
-    proposals.reserve(clashes.size());
+vector<SingleClashProposal> proposeAllResolutions(
+    const vector<Clash>& clashes,
+    const vector<Session>& sessions) {
+    vector<SingleClashProposal> list;
     for (size_t i = 0; i < clashes.size(); ++i) {
-        proposals.push_back(proposeResolution(i, clashes, sessions));
+        list.push_back(proposeSingleClash(static_cast<int>(i), clashes, sessions));
     }
-    return proposals;
+    return list;
 }
 
-std::vector<Session> Resolver::applyResolution(
-    const ResolutionProposal& proposal,
-    const std::vector<Session>& sessions
-) {
-    std::vector<Session> updated = sessions;
-    if (!proposal.feasible) return updated;
-
-    if (proposal.action == "REMOVE_DUPLICATE") {
-        if (proposal.targetSessionIndex < updated.size()) {
-            updated.erase(updated.begin() + proposal.targetSessionIndex);
-        }
-    } else if (proposal.targetSessionIndex < updated.size()) {
-        updated[proposal.targetSessionIndex] = proposal.proposedSession;
-    }
-    return updated;
-}
+} 

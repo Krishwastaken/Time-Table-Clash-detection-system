@@ -1053,6 +1053,86 @@
       });
     }
 
+    function openBatchResolverModal() {
+      showModal(
+        '<div class="modal-dialog modal-dialog-large">' +
+        '<div class="modal-header"><h3>Automated Graph Coloring Batch Resolver</h3><button type="button" class="btn btn-ghost modal-close-btn">&times;</button></div>' +
+        '<div class="modal-body" id="batch-resolver-body">' +
+        '<div style="text-align:center; padding:30px;">' + I.svg("refresh", 24) + '<p>Running Welsh-Powell graph coloring resolver via C++ engine...</p></div>' +
+        '</div>' +
+        '</div>'
+      );
+
+      API.resolveAllClashes(false).then(function (res) {
+        var d = res.data || {};
+        var mb = $("#batch-resolver-body");
+        if (!mb) return;
+
+        var applied = d.applied || [];
+        var unres = d.unresolved || [];
+        var resolvedCount = Math.max(0, (d.clashesBefore || 0) - (d.clashesAfter || 0));
+
+        var html =
+          '<div class="banner" style="background:#f0fdf4; border-color:#86efac; color:#166534; margin-bottom:16px;">' +
+          '<strong>Welsh-Powell Graph Coloring Completed.</strong> Automatically resolved ' + resolvedCount + ' clashes. ' +
+          'Found ' + applied.length + ' optimal room reassignment(s). ' + unres.length + ' conflicts require administrative scheduling decisions.' +
+          '</div>' +
+          '<div class="kpi-grid" style="grid-template-columns: repeat(4, 1fr); margin-bottom:16px;">' +
+          '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Initial Clashes</div><div class="kpi-value" style="color:#dc2626;">' + (d.clashesBefore || 0) + '</div></div></article>' +
+          '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Remaining Clashes</div><div class="kpi-value" style="color:#ea580c;">' + (d.clashesAfter || 0) + '</div></div></article>' +
+          '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Applied Fixes</div><div class="kpi-value" style="color:#16a34a;">' + applied.length + '</div></div></article>' +
+          '<article class="kpi"><div class="kpi-body"><div class="kpi-label">Unresolved</div><div class="kpi-value" style="color:#64748b;">' + unres.length + '</div></div></article>' +
+          '</div>';
+
+        if (applied.length > 0) {
+          html += '<h4 style="margin:16px 0 8px 0; color:#1e293b;">Applied Room Reassignments (' + applied.length + ')</h4>' +
+            '<div class="table-container" style="max-height:200px; overflow-y:auto; margin-bottom:16px;">' +
+            '<table class="data-table"><thead><tr><th>Section</th><th>Subject</th><th>Original Venue</th><th>New Room</th><th>Reason</th></tr></thead><tbody>';
+          applied.forEach(function (a) {
+            html += '<tr><td><strong>' + esc(a.section) + '</strong></td><td>' + esc(a.subject) + '</td><td>' + esc(a.from) + '</td><td><span class="badge badge-success">' + esc(a.to) + '</span></td><td>' + esc(a.reason) + '</td></tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+
+        if (unres.length > 0) {
+          html += '<h4 style="margin:16px 0 8px 0; color:#1e293b;">Unresolved Conflicts with Academic Constraints (' + unres.length + ')</h4>' +
+            '<div class="table-container" style="max-height:180px; overflow-y:auto; margin-bottom:16px;">' +
+            '<table class="data-table"><thead><tr><th>Conflict Type</th><th>Description</th><th>Reason</th></tr></thead><tbody>';
+          unres.forEach(function (u) {
+            html += '<tr><td><span class="badge badge-warning">' + esc(u.type) + '</span></td><td>' + esc(u.description) + '</td><td><small class="muted">' + esc(u.reason) + '</small></td></tr>';
+          });
+          html += '</tbody></table></div>';
+        }
+
+        html += '<div style="display:flex; justify-content:flex-end; gap:10px; margin-top:20px; border-top:1px solid #e2e8f0; padding-top:16px;">' +
+          '<button type="button" class="btn btn-secondary modal-close-btn">Cancel</button>' +
+          '<button type="button" class="btn btn-primary" id="btn-apply-batch-to-draft" style="background:#16a34a; border-color:#15803d;">' +
+          I.svg("check", 16) + ' Apply All ' + applied.length + ' Fixes to Draft Timetable</button>' +
+          '</div>';
+
+        mb.innerHTML = html;
+
+        var applyBtn = $("#btn-apply-batch-to-draft", mb);
+        if (applyBtn) {
+          applyBtn.onclick = function () {
+            this.disabled = true;
+            this.textContent = "Applying fixes to draft...";
+            API.resolveAllClashes(true).then(function () {
+              toast("Batch resolution applied! Draft timetable updated.");
+              closeModal();
+              triggerDetection();
+            }).catch(function (err) {
+              toast(err.message, true);
+              applyBtn.disabled = false;
+            });
+          };
+        }
+      }).catch(function (err) {
+        var mb = $("#batch-resolver-body");
+        if (mb) mb.innerHTML = '<div style="color:#dc2626; padding:20px;">Resolver Error: ' + esc(err.message) + '</div>';
+      });
+    }
+
     function triggerDetection() {
       var btn = $("#btn-exec-clash-detection", container);
       if (btn) {
@@ -1077,6 +1157,8 @@
     }
 
     $("#btn-exec-clash-detection", container).onclick = triggerDetection;
+    var batchBtn = $("#btn-batch-resolve", container);
+    if (batchBtn) batchBtn.onclick = openBatchResolverModal;
 
     $$(".clash-filter-btn", container).forEach(function (btn) {
       btn.onclick = function () {

@@ -1,4 +1,6 @@
 #include "Session.h"
+#include <algorithm>
+#include <cctype>
 
 Session::Session(
     const std::string& subject,
@@ -8,7 +10,8 @@ Session::Session(
     const std::string& day,
     const std::string& startTime,
     const std::string& endTime,
-    int studentCount
+    int studentCount,
+    WeekRule weekRule
 )
     : subject(subject),
       faculty(faculty),
@@ -17,7 +20,8 @@ Session::Session(
       day(day),
       startTime(startTime),
       endTime(endTime),
-      studentCount(studentCount)
+      studentCount(studentCount),
+      weekRule(weekRule)
 {
 }
 
@@ -29,7 +33,8 @@ Session::Session()
       day(""),
       startTime(""),
       endTime(""),
-      studentCount(0)
+      studentCount(0),
+      weekRule(WeekRule::Always)
 {
 }
 
@@ -66,48 +71,132 @@ int Session::getStudentCount() const {
     return studentCount;
 }
 
-int Session::getRoomCapacity() const {
-    if (room.rfind("CR", 0) == 0)
-        return 100;
+namespace {
 
-    if (room.rfind("LT", 0) == 0)
-        return 200;
+// Capacity of ONE room (lower-case name). 0 = unknown.
+int capacityOfRoom(const std::string& normalizedRoom)
+{
+    // Classrooms
+    if (normalizedRoom.find("cr") == 0)
+        return 80;
 
-    if (room.find("Audi") != std::string::npos || room.find("AUDI") != std::string::npos)
+    // Lecture theatres
+    if (normalizedRoom.find("lt") == 0)
+        return 160;
+
+    // Digital laboratories
+    if (normalizedRoom.find("digital lab-1") != std::string::npos ||
+        normalizedRoom.find("digital lab-2") != std::string::npos)
+        return 80;
+
+    // Other laboratories
+    if (normalizedRoom.find("lab-1") != std::string::npos ||
+    normalizedRoom.find("lab-7") != std::string::npos)
+    {
+        return 40;
+    }
+
+    if (normalizedRoom.find("lab-2") != std::string::npos ||
+    normalizedRoom.find("lab-5") != std::string::npos ||
+    normalizedRoom.find("lab-6") != std::string::npos)
+    {
+        return 80;
+    }
+    
+    // Auditorium
+    if (normalizedRoom.find("gehu-audi") != std::string::npos)
         return 500;
-
-    if (room.find("Lab") != std::string::npos || room.find("LAB") != std::string::npos)
-        return 45;
 
     return 0;
 }
 
-void Session::setRoom(const std::string& newRoom) {
-    room = newRoom;
+
+} // namespace
+
+// A session held in two rooms ("Lab-7 & Lab-6") may use both: capacities add up.
+int Session::getRoomCapacity() const
+{
+    std::string lower = room;
+
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+    int total = 0;
+    std::string part;
+
+    for (std::size_t i = 0; i <= lower.size(); ++i) {
+        if (i == lower.size() || lower[i] == '&') {
+            const int capacity = capacityOfRoom(part);
+            part.clear();
+
+            if (capacity == 0)
+                return 0;                   // one unknown room: do not guess
+
+            total += capacity;
+        } else {
+            part += lower[i];
+        }
+    }
+
+    return total;
 }
 
-void Session::setStartTime(const std::string& newStart) {
-    startTime = newStart;
+WeekRule Session::getWeekRule() const {
+    return weekRule;
 }
 
-void Session::setEndTime(const std::string& newEnd) {
-    endTime = newEnd;
+void Session::setWeekRule(WeekRule rule) {
+    weekRule = rule;
 }
 
-void Session::setDay(const std::string& newDay) {
-    day = newDay;
+void Session::setRoom(const std::string& r) {
+    room = r;
 }
 
-void Session::setFaculty(const std::string& newFaculty) {
-    faculty = newFaculty;
+void Session::setDay(const std::string& d) {
+    day = d;
 }
 
-void Session::setStudentCount(int newCount) {
-    studentCount = newCount;
+void Session::setStartTime(const std::string& s) {
+    startTime = s;
 }
 
+void Session::setEndTime(const std::string& e) {
+    endTime = e;
+}
+
+int Session::getDayIndex() const {
+    std::string d;
+    for (char c : day) {
+        if (!std::isspace(static_cast<unsigned char>(c)))
+            d += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    static const char* const names[7] = {
+        "monday", "tuesday", "wednesday", "thursday",
+        "friday", "saturday", "sunday"
+    };
+
+    for (int i = 0; i < 7; ++i) {
+        const std::string full = names[i];
+        if (d == full || d == full.substr(0, 3))
+            return i;
+    }
+
+    return 7;
+}
+
+// Weekday order first (the old version compared the day NAMES as strings,
+// which sorted Friday before Monday), then start time (HH:MM sorts correctly
+// as text because it is zero padded).
 bool Session::operator<(const Session& other) const {
-    if (day != other.day)
+    const int a = getDayIndex();
+    const int b = other.getDayIndex();
+
+    if (a != b)
+        return a < b;
+
+    if (a == 7 && day != other.day)
         return day < other.day;
 
     return startTime < other.startTime;
@@ -122,6 +211,11 @@ std::ostream& operator<<(std::ostream& os, const Session& session) {
        << session.startTime << " - "
        << session.endTime << " | "
        << session.studentCount << " students";
+
+    if (session.weekRule == WeekRule::SaturdayOffOnly)
+        os << " [Saturday-off weeks only]";
+    else if (session.weekRule == WeekRule::SaturdayWorkingOnly)
+        os << " [Saturday-working weeks only]";
 
     return os;
 }

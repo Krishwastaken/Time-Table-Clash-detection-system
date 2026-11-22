@@ -1,9 +1,23 @@
 const { requireAuth, sendJSON, sendError } = require('../middleware');
-const { runClashDetection, getLatestClashRun, proposeResolutionForClash, applyProposalToDraft } = require('../services/cpp_engine.service');
+const { runClashDetection, getLatestClashRun, proposeResolutionForClash, applyProposalToDraft, resolveAllClashes } = require('../services/cpp_engine.service');
 const auditService = require('../services/audit.service');
 const db = require('../db');
 
 function handleClashRoutes(req, res, url, body) {
+  // Batch resolve all clashes
+  if (url.pathname === '/api/clash/resolve-all' && req.method === 'POST') {
+    const session = requireAuth(req, res);
+    if (!session) return true;
+
+    try {
+      const applyToDraft = body && body.apply === true;
+      const outcome = resolveAllClashes({ adminId: session.adminId, adminName: session.name, applyToDraft });
+      return sendJSON(res, { ok: true, data: outcome.result, appliedToDraft });
+    } catch (err) {
+      console.error('Batch clash resolution failed:', err);
+      return sendError(res, `C++ Batch Resolver failed: ${err.message}`, 500);
+    }
+  }
   // 1. POST /api/clash/detect: Execute real C++ clash detection engine
   if (url.pathname === '/api/clash/detect' && req.method === 'POST') {
     const session = requireAuth(req, res);
