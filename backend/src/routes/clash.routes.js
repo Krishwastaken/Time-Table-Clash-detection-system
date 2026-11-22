@@ -10,8 +10,8 @@ function handleClashRoutes(req, res, url, body) {
     if (!session) return true;
 
     try {
-      const applyToDraft = body && body.apply === true;
-      const outcome = resolveAllClashes({ adminId: session.adminId, adminName: session.name, applyToDraft });
+      const appliedToDraft = !!(body && body.apply === true);
+      const outcome = resolveAllClashes({ adminId: session.adminId, adminName: session.name, applyToDraft: appliedToDraft });
       return sendJSON(res, { ok: true, data: outcome.result, appliedToDraft });
     } catch (err) {
       console.error('Batch clash resolution failed:', err);

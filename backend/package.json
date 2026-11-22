@@ -5,7 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node tests/api.test.js",
+    "test": "node tests/api.test.js && node tests/integration.test.js",
     "provision": "node scripts/provision_admins.js",
     "build:cpp": "bash scripts/build_cpp.sh"
   },
