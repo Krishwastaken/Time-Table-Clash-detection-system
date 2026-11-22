@@ -120,6 +120,99 @@
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") setMenu(false); });
   window.addEventListener("hashchange", route);
 
+  /* ---------- Command Palette (Cmd+K / Ctrl+K) ---------- */
+  var cmdRoot = $("#cmd-palette-root");
+  var quickActions = [
+    { label: "Run Clash Detection", route: "clash-detection", badge: "Action", icon: "play" },
+    { label: "Auto-Resolve All Clashes", route: "clash-detection", badge: "Action", icon: "check" },
+    { label: "Manage Timetable Sessions", route: "timetable", badge: "Module", icon: "calendar" },
+    { label: "Student Directory", route: "students", badge: "Module", icon: "users" },
+    { label: "Faculty Master", route: "faculty", badge: "Module", icon: "faculty" },
+    { label: "Import / Export Hub", route: "import-export", badge: "Module", icon: "upload" },
+    { label: "Published Versions", route: "published", badge: "Module", icon: "published" },
+    { label: "Audit & Activity Logs", route: "activity-logs", badge: "Security", icon: "history" },
+    { label: "Academic Rooms & Capacity", route: "academic-structure", badge: "Setup", icon: "grid" }
+  ];
+
+  function openCommandPalette() {
+    if (!A.getSession()) return;
+    cmdRoot.innerHTML =
+      '<div class="cmd-palette-backdrop" id="cmd-backdrop">' +
+      '<div class="cmd-palette" role="dialog" aria-modal="true" aria-label="Command Palette">' +
+      '<div class="cmd-input-wrap">' +
+      I.svg("search", 18) +
+      '<input type="text" id="cmd-search-input" class="cmd-input" placeholder="Search modules, actions, and tools..." autocomplete="off">' +
+      '<kbd style="font-size:11px; background:#f1f5f9; padding:2px 6px; border-radius:4px; color:#64748b;">ESC</kbd>' +
+      '</div>' +
+      '<div class="cmd-results" id="cmd-results-list"></div>' +
+      '<div class="cmd-footer"><span>Press <strong>Enter</strong> to navigate</span><span><strong>↑↓</strong> to browse</span></div>' +
+      '</div></div>';
+
+    var input = $("#cmd-search-input");
+    var list = $("#cmd-results-list");
+    var backdrop = $("#cmd-backdrop");
+
+    function renderItems(filter) {
+      var query = (filter || "").toLowerCase().trim();
+      var matches = quickActions.filter(function (item) {
+        return !query || item.label.toLowerCase().includes(query) || item.route.toLowerCase().includes(query);
+      });
+
+      if (matches.length === 0) {
+        list.innerHTML = '<div style="padding:20px; text-align:center; color:#94a3b8; font-size:13px;">No commands or modules matched "' + esc(query) + '"</div>';
+        return;
+      }
+
+      list.innerHTML = matches.map(function (item, idx) {
+        return '<div class="cmd-item ' + (idx === 0 ? 'selected' : '') + '" data-route="' + item.route + '">' +
+          '<div class="cmd-item-left">' + I.svg(item.icon, 16) + '<span>' + esc(item.label) + '</span></div>' +
+          '<span class="cmd-badge">' + esc(item.badge) + '</span>' +
+          '</div>';
+      }).join('');
+
+      document.querySelectorAll(".cmd-item").forEach(function (el) {
+        el.onclick = function () {
+          location.hash = "#/" + this.dataset.route;
+          closeCommandPalette();
+        };
+      });
+    }
+
+    input.oninput = function () { renderItems(this.value); };
+    input.onkeydown = function (e) {
+      if (e.key === "Escape") { closeCommandPalette(); }
+      else if (e.key === "Enter") {
+        var sel = document.querySelector(".cmd-item.selected") || document.querySelector(".cmd-item");
+        if (sel) {
+          location.hash = "#/" + sel.dataset.route;
+          closeCommandPalette();
+        }
+      }
+    };
+
+    backdrop.onclick = function (e) {
+      if (e.target === backdrop) closeCommandPalette();
+    };
+
+    renderItems("");
+    input.focus();
+  }
+
+  function closeCommandPalette() {
+    cmdRoot.innerHTML = "";
+  }
+
+  document.addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if ($("#cmd-backdrop")) closeCommandPalette();
+      else openCommandPalette();
+    }
+  });
+
+  var cmdBtn = $("#cmd-palette-btn");
+  if (cmdBtn) cmdBtn.onclick = openCommandPalette;
+
   renderNav();
   route();
 })();

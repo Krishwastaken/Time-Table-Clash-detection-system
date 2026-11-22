@@ -71,6 +71,9 @@
         </span>
       </a>
       <div class="topbar-right">
+        <button type="button" class="btn btn-ghost-light" id="cmd-palette-btn" aria-label="Open Command Palette" title="Command Palette (Cmd+K / Ctrl+K)" style="display:inline-flex; align-items:center; gap:6px; font-size:13px;">
+          <span>Jump to...</span> <kbd style="background:rgba(255,255,255,0.22); padding:1px 5px; border-radius:4px; font-size:11px; font-family:monospace;">⌘K</kbd>
+        </button>
         <span class="mode-pill" id="mode-pill">Demo mode</span>
         <div class="profile">
           <span class="avatar" id="avatar" aria-hidden="true"></span>
@@ -93,6 +96,9 @@
       <div id="page"></div>
     </main>
   </div>
+
+  <div id="a11y-live" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="cmd-palette-root"></div>
 
   <script src="js/config.js"></script>
   <script src="js/api.js"></script>
