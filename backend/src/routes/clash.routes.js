@@ -116,6 +116,65 @@ function handleClashRoutes(req, res, url, body) {
     return sendJSON(res, { ok: true, message: 'Resolution proposal rejected.' });
   }
 
+  // 6. GET /api/clash/export: Export conflict report as CSV or Markdown
+  if (url.pathname === '/api/clash/export' && req.method === 'GET') {
+    const format = (url.searchParams.get('format') || 'csv').toLowerCase();
+    const latest = getLatestClashRun();
+
+    if (!latest || !latest.clashes || latest.clashes.length === 0) {
+      return sendError(res, 'No clash detection data available to export. Run clash detection first.', 404);
+    }
+
+    const { toCSVString } = require('../utils/csv_parser');
+
+    if (format === 'markdown' || format === 'md') {
+      let md = '# University Timetable Conflict Audit Report\n\n';
+      md += `*Generated:* ${new Date().toISOString()}  \n`;
+      md += `*Run ID:* \`${latest.runId}\`  \n`;
+      md += `*Total Detected Clashes:* **${latest.totalClashes}**  \n\n`;
+
+      md += '## Conflict Breakdown by Category\n\n';
+      md += '| Category | Count |\n| :--- | :--- |\n';
+      for (const [cat, cnt] of Object.entries(latest.summaryByCategory || {})) {
+        md += `| ${cat} | ${cnt} |\n`;
+      }
+
+      md += '\n## Detected Conflict Records\n\n';
+      md += '| ID | Category | Severity | Description |\n';
+      md += '| :--- | :--- | :--- | :--- |\n';
+      for (const c of latest.clashes) {
+        md += `| ${c.clash_id} | ${c.clash_type} | ${c.severity} | ${c.description.replace(/\|/g, '\\|')} |\n`;
+      }
+
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="timetable_conflicts_report.md"');
+      res.writeHead(200);
+      res.end(md);
+      return true;
+    }
+
+    // Default: CSV export
+    const rows = [
+      ['Clash_ID', 'Category', 'Severity', 'Description', 'Status']
+    ];
+
+    for (const c of latest.clashes) {
+      rows.push([
+        c.clash_id,
+        c.clash_type,
+        c.severity,
+        c.description,
+        c.status
+      ]);
+    }
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="timetable_conflicts_report.csv"');
+    res.writeHead(200);
+    res.end(toCSVString(rows));
+    return true;
+  }
+
   return false;
 }
 

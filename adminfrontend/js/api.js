@@ -160,6 +160,9 @@
     resolveAllClashes: function (applyToDraft) {
       return req("POST", "/api/clash/resolve-all", { apply: !!applyToDraft });
     },
+    getClashesExportUrl: function (format) {
+      return this.baseUrl + "/api/clash/export?format=" + (format || "csv");
+    },
     applyResolution: function (proposal) {
       return req("POST", "/api/clash/apply", { proposal: proposal });
     },

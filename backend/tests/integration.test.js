@@ -156,6 +156,22 @@ async function runIntegrationSuite() {
     fail('HTML timetable parser validation', e);
   }
 
+  // 5. Conflict Export Endpoints (CSV and Markdown)
+  try {
+    const resCsv = await invokeApi('GET', '/api/clash/export?format=csv');
+    assert.strictEqual(resCsv.status, 200);
+    assert(resCsv.headers['content-type'].includes('text/csv'));
+    assert(typeof resCsv.body === 'string' && resCsv.body.includes('Clash_ID'));
+
+    const resMd = await invokeApi('GET', '/api/clash/export?format=markdown');
+    assert.strictEqual(resMd.status, 200);
+    assert(resMd.headers['content-type'].includes('text/markdown'));
+    assert(typeof resMd.body === 'string' && resMd.body.includes('# University Timetable Conflict Audit Report'));
+    pass('Downloadable conflict reports generated in both CSV and Markdown formats');
+  } catch (e) {
+    fail('Conflict export endpoints', e);
+  }
+
   console.log('\n========================================================');
   console.log(`TEST SUMMARY: ${passed}/${passed + failed} passed (${failed} failed)`);
   console.log('========================================================\n');

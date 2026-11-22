@@ -399,7 +399,11 @@
       '<button type="button" class="btn btn-secondary btn-sm clash-filter-btn" data-type="Room capacity">Room Capacity</button>' +
       '<button type="button" class="btn btn-secondary btn-sm clash-filter-btn" data-type="Duplicate session">Duplicates</button>' +
       "</div>" +
+      '<div style="display:flex; gap:8px; align-items:center;">' +
+      '<a href="' + API.getClashesExportUrl("csv") + '" class="btn btn-secondary btn-sm" target="_blank" download="timetable_conflicts.csv">' + I.svg("download", 14) + ' Export CSV</a>' +
+      '<a href="' + API.getClashesExportUrl("md") + '" class="btn btn-secondary btn-sm" target="_blank" download="timetable_conflicts.md">' + I.svg("download", 14) + ' Markdown</a>' +
       '<div id="engine-status-badge" class="badge badge-success">Engine Ready</div>' +
+      "</div>" +
       "</div>" +
       '<div id="clashes-list-container"><div style="text-align:center; padding:40px; background:#fff; border-radius:8px; border:1px solid #e2e8f0;">' +
       I.svg("alert", 32) +
@@ -464,10 +468,11 @@
       "</div>" +
       "</div>" +
       '<div id="tab-exports" class="tab-content" hidden>' +
-      '<div class="kpi-grid" style="grid-template-columns: repeat(3, 1fr);">' +
+      '<div class="kpi-grid" style="grid-template-columns: repeat(4, 1fr);">' +
       '<div class="card"><h4>Timetable CSV</h4><p class="muted">Export the current working draft timetable.</p><a href="' + API.getTimetableExportUrl() + '" class="btn btn-primary btn-block">' + I.svg("download", 16) + ' Download Timetable CSV</a></div>' +
       '<div class="card"><h4>Students CSV</h4><p class="muted">Export all registered student records.</p><a href="' + API.getStudentsExportUrl() + '" class="btn btn-primary btn-block">' + I.svg("download", 16) + ' Download Students CSV</a></div>' +
       '<div class="card"><h4>Faculty Master CSV</h4><p class="muted">Export full faculty directory with office locations.</p><a href="' + API.getFacultyExportUrl() + '" class="btn btn-primary btn-block">' + I.svg("download", 16) + ' Download Faculty CSV</a></div>' +
+      '<div class="card"><h4>Conflict Audit Report</h4><p class="muted">Download latest C++ clash analysis report.</p><div style="display:flex; gap:6px;"><a href="' + API.getClashesExportUrl("csv") + '" class="btn btn-secondary" style="flex:1;">CSV</a><a href="' + API.getClashesExportUrl("md") + '" class="btn btn-secondary" style="flex:1;">Markdown</a></div></div>' +
       "</div>" +
       "</div>"
     );
